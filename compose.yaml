@@ -6,8 +6,8 @@ services:
     environment:
       # Comma-separated list of FA Full-Time fixture URLs to poll
       - FIXTURE_URLS=${FIXTURE_URLS}
-      # Google Calendar ID to add events to
-      - CALENDAR_ID=${CALENDAR_ID}
+      # Comma-separated list of Google Calendar IDs (one per fixture URL, in same order)
+      - CALENDAR_IDS=${CALENDAR_IDS}
       # Path to service account credentials (inside container)
       - SERVICE_ACCOUNT_FILE=/app/service_account.json
       # Time to run daily poll (24-hour format)

@@ -14,7 +14,7 @@ from googleapiclient.errors import HttpError
 
 # Configuration from environment variables
 FIXTURE_URLS = os.environ.get("FIXTURE_URLS", "").split(",")
-CALENDAR_ID = os.environ.get("CALENDAR_ID", "")
+CALENDAR_IDS = os.environ.get("CALENDAR_IDS", "").split(",")
 SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "/app/service_account.json")
 POLL_SCHEDULE = os.environ.get("POLL_SCHEDULE", "08:00")
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
@@ -258,22 +258,29 @@ def translate_team_name(full_name: str) -> str:
 
 def build_calendar_event(fixture: dict) -> dict | None:
     """Build a Google Calendar event dict from a fixture."""
-    start_dt = parse_fixture_datetime(fixture["date"], fixture["time"])
-    if not start_dt:
+    kickoff_dt = parse_fixture_datetime(fixture["date"], fixture["time"])
+    if not kickoff_dt:
         return None
 
-    # Assume matches last ~2 hours
-    end_dt = start_dt + timedelta(hours=2)
+    # Start 30 mins before kick-off (warmup time)
+    start_dt = kickoff_dt - timedelta(minutes=30)
+    
+    # Total duration 90 mins (30 warmup + 60 playing)
+    end_dt = start_dt + timedelta(minutes=90)
 
     # Translate team names to short versions
     home_team = translate_team_name(fixture["home_team"])
     away_team = translate_team_name(fixture["away_team"])
 
-    # Build event summary (no emoji)
-    summary = f"{home_team} vs {away_team}"
+    # Format kick-off time for title
+    ko_time = kickoff_dt.strftime("%H:%M")
+    
+    # Build event summary with kick-off time
+    summary = f"{home_team} vs {away_team} - KO {ko_time}"
 
     # Description keeps full names for reference
     description_parts = [
+        f"Kick-off: {ko_time}",
         f"Home: {fixture['home_team']}",
         f"Away: {fixture['away_team']}",
     ]
@@ -313,14 +320,14 @@ def build_calendar_event(fixture: dict) -> dict | None:
     return event
 
 
-def create_calendar_event(service, fixture: dict) -> str | None:
+def create_calendar_event(service, calendar_id: str, fixture: dict) -> str | None:
     """Create a Google Calendar event for a fixture. Returns event ID or None."""
     event = build_calendar_event(fixture)
     if not event:
         return None
 
     try:
-        created_event = service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+        created_event = service.events().insert(calendarId=calendar_id, body=event).execute()
         print(f"  Created event: {event['summary']} on {fixture['date']}")
         return created_event["id"]
     except HttpError as e:
@@ -328,14 +335,14 @@ def create_calendar_event(service, fixture: dict) -> str | None:
         return None
 
 
-def update_calendar_event(service, event_id: str, fixture: dict) -> bool:
+def update_calendar_event(service, calendar_id: str, event_id: str, fixture: dict) -> bool:
     """Update an existing Google Calendar event. Returns True on success."""
     event = build_calendar_event(fixture)
     if not event:
         return False
 
     try:
-        service.events().update(calendarId=CALENDAR_ID, eventId=event_id, body=event).execute()
+        service.events().update(calendarId=calendar_id, eventId=event_id, body=event).execute()
         print(f"  Updated event: {event['summary']} on {fixture['date']}")
         return True
     except HttpError as e:
@@ -353,8 +360,8 @@ def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> None:
         print("No fixtures found to sync.")
         return
 
-    if not CALENDAR_ID:
-        print("ERROR: CALENDAR_ID environment variable not set")
+    if not CALENDAR_IDS or CALENDAR_IDS == [""]:
+        print("ERROR: CALENDAR_IDS environment variable not set")
         return
 
     service = get_calendar_service()
@@ -366,6 +373,16 @@ def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> None:
     updated_count = 0
 
     for url_index, fixture in all_fixtures:
+        # Get the calendar ID for this URL index
+        if url_index >= len(CALENDAR_IDS):
+            print(f"  ERROR: No calendar ID configured for URL index {url_index}")
+            continue
+        
+        calendar_id = CALENDAR_IDS[url_index].strip()
+        if not calendar_id:
+            print(f"  ERROR: Empty calendar ID for URL index {url_index}")
+            continue
+
         date_key = get_fixture_date_key(fixture, url_index)
         fixture_hash = get_fixture_hash(fixture)
 
@@ -380,12 +397,12 @@ def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> None:
             
             # Details changed - update the calendar event
             print(f"  Fixture changed for {fixture['date']} - updating calendar...")
-            if update_calendar_event(service, existing["event_id"], fixture):
+            if update_calendar_event(service, calendar_id, existing["event_id"], fixture):
                 synced[date_key] = {"event_id": existing["event_id"], "hash": fixture_hash}
                 updated_count += 1
         else:
             # New fixture
-            event_id = create_calendar_event(service, fixture)
+            event_id = create_calendar_event(service, calendar_id, fixture)
             if event_id:
                 synced[date_key] = {"event_id": event_id, "hash": fixture_hash}
                 new_count += 1
@@ -422,8 +439,14 @@ def validate_config() -> bool:
     if not FIXTURE_URLS or FIXTURE_URLS == [""]:
         errors.append("FIXTURE_URLS environment variable is not set")
 
-    if not CALENDAR_ID:
-        errors.append("CALENDAR_ID environment variable is not set")
+    if not CALENDAR_IDS or CALENDAR_IDS == [""]:
+        errors.append("CALENDAR_IDS environment variable is not set")
+
+    # Check that we have a calendar ID for each fixture URL
+    url_count = len([u for u in FIXTURE_URLS if u.strip()])
+    cal_count = len([c for c in CALENDAR_IDS if c.strip()])
+    if url_count != cal_count:
+        errors.append(f"Mismatch: {url_count} fixture URLs but {cal_count} calendar IDs (must be equal)")
 
     if not Path(SERVICE_ACCOUNT_FILE).exists():
         errors.append(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
@@ -440,11 +463,15 @@ def validate_config() -> bool:
 if __name__ == "__main__":
     print("Football Fixture Calendar Sync")
     print("=" * 40)
-    print(f"Fixture URLs: {len(FIXTURE_URLS)} configured")
-    print(f"Calendar ID: {CALENDAR_ID[:20]}..." if CALENDAR_ID else "Calendar ID: NOT SET")
+    url_count = len([u for u in FIXTURE_URLS if u.strip()])
+    cal_count = len([c for c in CALENDAR_IDS if c.strip()])
+    print(f"Fixture URLs: {url_count} configured")
+    print(f"Calendar IDs: {cal_count} configured")
     print(f"Poll Schedule: {POLL_SCHEDULE}")
     print(f"Timezone: {TZ}")
     print(f"Data Directory: {DATA_DIR}")
+    if TEAM_NAMES:
+        print(f"Team translations: {len(TEAM_NAMES)} configured")
     print("=" * 40)
 
     if not validate_config():
