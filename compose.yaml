@@ -16,6 +16,13 @@ services:
       - TZ=${TZ:-Europe/London}
       # Team name translations (Full Name:Short,Full Name 2:Short 2)
       - TEAM_NAMES=${TEAM_NAMES:-}
+      # Email notifications (optional - leave blank to disable)
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - EMAIL_FROM=${EMAIL_FROM:-}
+      - EMAIL_TO=${EMAIL_TO:-}
       # Data directory for persistence
       - DATA_DIR=/app/data
     volumes:
