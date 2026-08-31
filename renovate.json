@@ -1,6 +1,53 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ]
+  "extends": ["config:recommended"],
+
+  "dependencyDashboard": true,
+
+  "platformAutomerge": true,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
+
+  "minimumReleaseAge": "3 days",
+  "rangeStrategy": "pin",
+
+  "packageRules": [
+    {
+      "description": "Dev tooling: low blast radius, shorter cool-down, automerge",
+      "matchDepTypes": ["devDependencies"],
+      "minimumReleaseAge": "1 day",
+      "automerge": true
+    },
+    {
+      "description": "Patch bumps to runtime deps: automerge after standard cool-down",
+      "matchUpdateTypes": ["patch"],
+      "matchDepTypes": ["dependencies"],
+      "automerge": true
+    },
+    {
+      "description": "Minor bumps: needs a human, but still cool-down gated",
+      "matchUpdateTypes": ["minor"],
+      "matchDepTypes": ["dependencies"],
+      "automerge": false
+    },
+    {
+      "description": "Major bumps: longer cool-down, always manual review",
+      "matchUpdateTypes": ["major"],
+      "minimumReleaseAge": "14 days",
+      "automerge": false
+    }
+  ],
+
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "minimumReleaseAge": "0 days",
+    "automerge": true
+  },
+
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 4am on monday"],
+    "minimumReleaseAge": "3 days",
+    "automerge": true
+  }
 }
