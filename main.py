@@ -2,6 +2,9 @@ import os
 import time
 import json
 import hashlib
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -24,6 +27,14 @@ TZ = os.environ.get("TZ", "Europe/London")
 # Example: "Boldmere St Michaels Juniors U11 2015 JH:Mikes,Other Team U12:Owls"
 TEAM_NAMES_RAW = os.environ.get("TEAM_NAMES", "")
 
+# Email notification settings (optional)
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "")
+EMAIL_TO = os.environ.get("EMAIL_TO", "")  # Comma-separated for multiple recipients
+
 
 def load_team_names() -> dict[str, str]:
     """Load team name translations from environment variable."""
@@ -45,6 +56,54 @@ def load_team_names() -> dict[str, str]:
 
 
 TEAM_NAMES = load_team_names()
+
+
+def send_email_notification(fixture: dict) -> bool:
+    """Send an email notification about a new fixture."""
+    if not all([SMTP_USER, SMTP_PASSWORD, EMAIL_FROM, EMAIL_TO]):
+        return False  # Email not configured
+    
+    try:
+        # Build email content
+        home_team = translate_team_name(fixture["home_team"])
+        away_team = translate_team_name(fixture["away_team"])
+        
+        subject = f"New Fixture: {home_team} vs {away_team}"
+        
+        body_parts = [
+            f"A new fixture has been added to the calendar:\n",
+            f"Date: {fixture['date']}",
+            f"Kick-off: {fixture['time']}",
+            f"Match: {fixture['home_team']} vs {fixture['away_team']}",
+        ]
+        if fixture.get("venue"):
+            body_parts.append(f"Venue: {fixture['venue']}")
+        if fixture.get("competition"):
+            body_parts.append(f"Competition: {fixture['competition']}")
+        
+        body = "\n".join(body_parts)
+        
+        # Create message
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_FROM
+        msg["To"] = EMAIL_TO
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
+        
+        # Send email
+        recipients = [email.strip() for email in EMAIL_TO.split(",")]
+        
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, recipients, msg.as_string())
+        
+        print(f"  Email notification sent to {EMAIL_TO}")
+        return True
+        
+    except Exception as e:
+        print(f"  Failed to send email notification: {e}")
+        return False
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -406,6 +465,8 @@ def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> None:
             if event_id:
                 synced[date_key] = {"event_id": event_id, "hash": fixture_hash}
                 new_count += 1
+                # Send email notification for new fixtures
+                send_email_notification(fixture)
 
     save_synced_fixtures(synced)
     print(f"Sync complete. Added {new_count} new, updated {updated_count} existing.")
