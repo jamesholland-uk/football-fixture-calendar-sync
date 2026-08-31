@@ -16,7 +16,7 @@ from googleapiclient.errors import HttpError
 FIXTURE_URLS = os.environ.get("FIXTURE_URLS", "").split(",")
 CALENDAR_IDS = os.environ.get("CALENDAR_IDS", "").split(",")
 SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "/app/service_account.json")
-POLL_SCHEDULE = os.environ.get("POLL_SCHEDULE", "08:00")
+POLL_INTERVAL_HOURS = int(os.environ.get("POLL_INTERVAL_HOURS", "12"))
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
 TZ = os.environ.get("TZ", "Europe/London")
 
@@ -467,7 +467,7 @@ if __name__ == "__main__":
     cal_count = len([c for c in CALENDAR_IDS if c.strip()])
     print(f"Fixture URLs: {url_count} configured")
     print(f"Calendar IDs: {cal_count} configured")
-    print(f"Poll Schedule: {POLL_SCHEDULE}")
+    print(f"Poll Interval: every {POLL_INTERVAL_HOURS} hour(s)")
     print(f"Timezone: {TZ}")
     print(f"Data Directory: {DATA_DIR}")
     if TEAM_NAMES:
@@ -483,9 +483,9 @@ if __name__ == "__main__":
     # Run once immediately on startup
     job()
 
-    # Schedule the job to run at the configured time
-    schedule.every().day.at(POLL_SCHEDULE).do(job)
-    print(f"\nScheduled daily poll at {POLL_SCHEDULE}")
+    # Schedule the job to run at the configured interval
+    schedule.every(POLL_INTERVAL_HOURS).hours.do(job)
+    print(f"\nScheduled to poll every {POLL_INTERVAL_HOURS} hour(s)")
 
     # Keep the script running
     while True:

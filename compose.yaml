@@ -10,8 +10,8 @@ services:
       - CALENDAR_IDS=${CALENDAR_IDS}
       # Path to service account credentials (inside container)
       - SERVICE_ACCOUNT_FILE=/app/service_account.json
-      # Time to run daily poll (24-hour format)
-      - POLL_SCHEDULE=${POLL_SCHEDULE:-08:00}
+      # How often to poll for fixture updates (in hours)
+      - POLL_INTERVAL_HOURS=${POLL_INTERVAL_HOURS:-12}
       # Timezone for calendar events
       - TZ=${TZ:-Europe/London}
       # Team name translations (Full Name:Short,Full Name 2:Short 2)
