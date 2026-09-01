@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Create labelled [TEST GEO] Spond events for each row in test-data.csv.
+Create labelled [TEST GEO] Spond *matches* for each row in test-data.csv.
 
+Matches have type HOME or AWAY (alternating) so kit colours can be checked.
 Only the logged-in Spond user is invited (the team is not notified).
-Events are scheduled on the coming Sunday so they are easy to find and delete.
+Matches are scheduled on the coming Sunday so they are easy to find and delete.
 
 Usage:
-    # Preview locations only
+    # Preview locations and colours only
     python3 test_spond_locations.py
 
-    # Create events in Spond
+    # Create matches in Spond
     python3 test_spond_locations.py --create
 
-Loads SPOND_* and GOOGLE_MAPS_API_KEY from the environment or .env
+Loads SPOND_*, TEAM_COLOURS, and GOOGLE_MAPS_API_KEY from the environment or .env
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from geocoding import geocode_chosen, to_spond_location
+from team_colours import kit_colour_for_fixture, load_team_colours
 
 
 def load_dotenv() -> None:
@@ -70,7 +72,24 @@ def next_sunday_local(tz_name: str) -> datetime:
     return day
 
 
+def match_fixture(our_team: str, csv_team: str, venue_name: str, is_home: bool) -> dict:
+    opponent = csv_team if csv_team and csv_team != our_team else "Test Opponent"
+    if is_home:
+        return {
+            "home_team": our_team,
+            "away_team": opponent,
+            "venue": venue_name,
+        }
+    return {
+        "home_team": opponent,
+        "away_team": our_team,
+        "venue": venue_name,
+    }
+
+
 async def create_test_events(do_create: bool) -> None:
+    team_colours = load_team_colours()
+
     email = os.environ.get("SPOND_EMAIL", "")
     password = os.environ.get("SPOND_PASSWORD", "")
     group_ids = [g.strip() for g in os.environ.get("SPOND_GROUP_IDS", "").split(",") if g.strip()]
@@ -84,8 +103,15 @@ async def create_test_events(do_create: bool) -> None:
     group_id = group_ids[0]
     host_id = host_ids[0] if host_ids else ""
     venues = load_test_venues()
+    our_team = next(iter(team_colours), "")
     print(f"Venues: {len(venues)}")
     print(f"Spond group: {group_id}")
+    if our_team:
+        home_c = team_colours[our_team]["home"]
+        away_c = team_colours[our_team]["away"]
+        print(f"TEAM_COLOURS: '{our_team}' home {home_c}, away {away_c}")
+    else:
+        print("TEAM_COLOURS: not configured (matches will have no kit colour)")
     print(f"Mode: {'CREATE' if do_create else 'PREVIEW (pass --create to post to Spond)'}")
     print("")
 
@@ -111,6 +137,7 @@ async def create_test_events(do_create: bool) -> None:
         await s.clientsession.close()
         sys.exit(1)
 
+    group_name = group_data.get("name", "") or our_team or "Test Team"
     print(f"Inviting only member {invitee_id} (not the whole team)")
     start_day = next_sunday_local(tz_name)
     created = 0
@@ -131,23 +158,44 @@ async def create_test_events(do_create: bool) -> None:
             end_local = start_local + timedelta(minutes=60)
             start_utc = start_local.astimezone(timezone.utc)
             end_utc = end_local.astimezone(timezone.utc)
-            heading = f"[TEST GEO] {i + 1}/{len(venues)} {venue_name}"
+
+            is_home = i % 2 == 0
+            match_type = "HOME" if is_home else "AWAY"
+            fa_name = our_team or team_name or group_name
+            fixture = match_fixture(fa_name, team_name, venue_name, is_home)
+            kit_colour, _ = kit_colour_for_fixture(fixture, team_colours)
+            opponent = fixture["away_team"] if is_home else fixture["home_team"]
+            heading = f"[TEST GEO] {match_type} {i + 1}/{len(venues)} {venue_name}"
             description = "\n".join(
                 [
-                    "TEST EVENT — delete after checking the map pin.",
+                    "TEST MATCH — delete after checking the map pin and kit colour.",
+                    f"Type: {match_type}",
+                    f"Home: {fixture['home_team']}",
+                    f"Away: {fixture['away_team']}",
+                    f"teamColour: {kit_colour or '(omitted)'}",
+                    "opponentColour: (omitted)",
                     f"Source: {result.get('source')}",
                     f"Why: {reason}",
                     f"True address (not used for geocoding): {true_address}",
-                    f"Team hint: {team_name or '(none)'}",
                 ]
             )
 
             print(f"  {heading}")
+            print(f"  {match_type} vs {opponent}")
+            print(f"  teamColour: {kit_colour or '(none)'}  opponentColour: omitted")
             print(f"  {start_local.strftime('%a %d %b %H:%M')}  {location.get('addressLine')}")
             print(f"  pin: {location['latitude']:.6f}, {location['longitude']:.6f}")
 
             if not do_create:
                 continue
+
+            match_info = {
+                "teamName": group_name,
+                "opponentName": opponent,
+                "type": match_type,
+            }
+            if kit_colour:
+                match_info["teamColour"] = kit_colour
 
             event_data = {
                 "heading": heading,
@@ -156,6 +204,8 @@ async def create_test_events(do_create: bool) -> None:
                 "startTimestamp": start_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                 "endTimestamp": end_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                 "meetupPrior": 30,
+                "matchEvent": True,
+                "matchInfo": match_info,
                 "commentsDisabled": True,
                 "maxAccepted": 0,
                 "rsvpDate": None,
@@ -187,9 +237,9 @@ async def create_test_events(do_create: bool) -> None:
     print("\n" + "=" * 70)
     if do_create:
         print(f"Created {created}, failed/skipped {failed}")
-        print("Open Spond, find events titled [TEST GEO], tap each location, then delete them.")
+        print("Open Spond, find matches titled [TEST GEO], check pin and kit colour, then delete them.")
     else:
-        print("Preview only. Re-run with --create to post events to Spond.")
+        print("Preview only. Re-run with --create to post matches to Spond.")
 
 
 if __name__ == "__main__":
