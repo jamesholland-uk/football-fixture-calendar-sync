@@ -11,6 +11,8 @@ There is no official FA API. The container uses a headless browser to load the f
 - Optional Spond match events (one group per fixture URL), with clickable map pins
 - Updates existing calendar events when kick-off, opponent, or venue changes
 - Email notifications for newly found fixtures
+- Email alerts on poll/sync failure (and a recovery mail when it works again)
+- Optional Healthchecks.io ping so you are emailed if the container stops
 - Short team names in event titles (`TEAM_NAMES`)
 - Home/away kit colours on Spond match events (`TEAM_COLOURS`)
 - Dry-run mode (geocode and log, do not create events or write state)
@@ -77,7 +79,10 @@ Dockge: new stack from `compose.yaml`, put `service_account.json` and `.env` on 
 | `TZ` | Timezone for local kick-off times | `Europe/London` |
 | `TEAM_NAMES` | `Full FA name:Short,Other:Short` | none |
 | `TEAM_COLOURS` | `Full FA name:home:away` kit colours for Spond. Names (`white`) or quoted hex (`"#ffffff:#8000ff"` — unquoted `#` is a `.env` comment). Opponent colour is omitted | none |
-| `SMTP_*` / `EMAIL_FROM` / `EMAIL_TO` | Email on new fixtures | off if blank |
+| `SMTP_*` / `EMAIL_FROM` | SMTP login for outgoing mail | off if blank |
+| `EMAIL_TO` | Recipients for new-fixture emails | off |
+| `EMAIL_TO_ADMIN` | Recipients for poll/sync failure and recovery alerts | off |
+| `HEALTHCHECKS_PING_URL` | Ping URL (e.g. Healthchecks.io) after every poll. This is what catches a dead container | off |
 | `SPOND_EMAIL` / `SPOND_PASSWORD` | Spond login | off if blank |
 | `SPOND_GROUP_IDS` | Group IDs, one per URL, same order | off |
 | `SPOND_HOST_IDS` | Event owner member IDs, one per URL | your Spond user |
@@ -147,6 +152,15 @@ Leave `CALENDAR_IDS` empty, or set `DRY_RUN=true`.
 
 **Re-sync everything**  
 Stop the container, delete `data/synced_fixtures.json`, start again. Dry-run does not write this file.
+
+## Alerting
+
+SMTP cannot tell you the container has died — nothing is left to send mail. Use both:
+
+1. **Failure email** (`EMAIL_TO_ADMIN`, same SMTP as fixture mail): scrape failures, missing fixtures table, Calendar/Spond write errors, and uncaught exceptions. A follow-up mail is sent when the next poll succeeds. New-fixture notices still go only to `EMAIL_TO`.
+2. **Healthchecks.io** (optional `HEALTHCHECKS_PING_URL`): the container GETs this URL after every poll, even a failed one. If the ping stops, Healthchecks emails you. Set the check period to `POLL_INTERVAL_HOURS` (e.g. 12h) with ~1 hour grace.
+
+Compose also marks the container unhealthy if `data/last_run` is older than about 2.5 poll intervals (Dockge will show it; it does not send email by itself).
 
 ## License
 

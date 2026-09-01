@@ -25,6 +25,9 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - EMAIL_FROM=${EMAIL_FROM:-}
       - EMAIL_TO=${EMAIL_TO:-}
+      - EMAIL_TO_ADMIN=${EMAIL_TO_ADMIN:-}
+      # Optional dead-man's switch (Healthchecks.io ping URL). Pinged after every poll.
+      - HEALTHCHECKS_PING_URL=${HEALTHCHECKS_PING_URL:-}
       # Spond integration (optional - leave blank to disable)
       - SPOND_EMAIL=${SPOND_EMAIL:-}
       - SPOND_PASSWORD=${SPOND_PASSWORD:-}
@@ -42,3 +45,9 @@ services:
       - ./service_account.json:/app/service_account.json:ro
       # Persist synced fixture data across container restarts
       - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 30m
+      timeout: 10s
+      retries: 3
+      start_period: 10m
