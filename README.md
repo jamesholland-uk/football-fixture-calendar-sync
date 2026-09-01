@@ -48,7 +48,7 @@ Do not bake `service_account.json` into the image. Bind-mount it (see `compose.y
 ### 4. Maps key (for Spond pins)
 
 1. [Credentials](https://console.cloud.google.com/google/maps-apis/credentials)
-2. Enable **Geocoding API** and **Places API**
+2. Enable **Geocoding API** and **Places API** [APIs](https://console.cloud.google.com/google/maps-apis/api-list)
 3. Restrict the key to those APIs if you can
 4. Set `GOOGLE_MAPS_API_KEY` in `.env`
 
@@ -148,4 +148,4 @@ Stop the container, delete `data/synced_fixtures.json`, start again. Dry-run doe
 
 ## License
 
-MIT
+[MIT](LICENSE)
