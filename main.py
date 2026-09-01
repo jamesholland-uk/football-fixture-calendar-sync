@@ -4,6 +4,8 @@ import json
 import hashlib
 import smtplib
 import asyncio
+import traceback
+import urllib.request
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, timezone
@@ -40,7 +42,8 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "")
-EMAIL_TO = os.environ.get("EMAIL_TO", "")  # Comma-separated for multiple recipients
+EMAIL_TO = os.environ.get("EMAIL_TO", "")  # New-fixture notifications
+EMAIL_TO_ADMIN = os.environ.get("EMAIL_TO_ADMIN", "")  # Failure/recovery alerts
 
 # Spond integration (optional)
 SPOND_EMAIL = os.environ.get("SPOND_EMAIL", "")
@@ -50,6 +53,10 @@ SPOND_HOST_IDS = os.environ.get("SPOND_HOST_IDS", "").split(",")  # One per fixt
 
 # Dry run mode - test without creating events
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("true", "1", "yes")
+HEALTHCHECKS_PING_URL = os.environ.get("HEALTHCHECKS_PING_URL", "").strip()
+
+# True after a poll that sent a failure alert, so the next clean poll can send "recovered"
+_last_poll_had_errors = False
 
 
 def load_team_names() -> dict[str, str]:
@@ -83,53 +90,63 @@ def append_detail_url(parts: list[str], fixture: dict) -> None:
         parts.append(url)
 
 
-def send_email_notification(fixture: dict) -> bool:
-    """Send an email notification about a new fixture."""
-    if not all([SMTP_USER, SMTP_PASSWORD, EMAIL_FROM, EMAIL_TO]):
-        return False  # Email not configured
-    
+def smtp_configured() -> bool:
+    return all([SMTP_USER, SMTP_PASSWORD, EMAIL_FROM])
+
+
+def send_email(subject: str, body: str, to: str) -> bool:
+    """Send an email via SMTP. Returns True on success."""
+    recipients = [email.strip() for email in to.split(",") if email.strip()]
+    if not smtp_configured() or not recipients:
+        return False
     try:
-        # Build email content
-        home_team = translate_team_name(fixture["home_team"])
-        away_team = translate_team_name(fixture["away_team"])
-        
-        subject = f"New Fixture: {home_team} vs {away_team}"
-        
-        body_parts = [
-            f"A new fixture has been added to the calendar:\n",
-            f"Date: {fixture['date']}",
-            f"Kick-off: {fixture['time']}",
-            f"Match: {fixture['home_team']} vs {fixture['away_team']}",
-        ]
-        if fixture.get("venue"):
-            body_parts.append(f"Venue: {fixture['venue']}")
-        if fixture.get("competition"):
-            body_parts.append(f"Competition: {fixture['competition']}")
-        append_detail_url(body_parts, fixture)
-        
-        body = "\n".join(body_parts)
-        
-        # Create message
+        to_header = ", ".join(recipients)
         msg = MIMEMultipart()
         msg["From"] = EMAIL_FROM
-        msg["To"] = EMAIL_TO
+        msg["To"] = to_header
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain"))
-        
-        # Send email
-        recipients = [email.strip() for email in EMAIL_TO.split(",")]
-        
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.sendmail(EMAIL_FROM, recipients, msg.as_string())
-        
-        print(f"  Email notification sent to {EMAIL_TO}")
+        print(f"  Email sent to {to_header}: {subject}")
         return True
-        
     except Exception as e:
-        print(f"  Failed to send email notification: {e}")
+        print(f"  Failed to send email: {e}")
         return False
+
+
+def send_alert(subject: str, body: str) -> None:
+    """Email a failure/recovery alert to EMAIL_TO_ADMIN (not fixture recipients)."""
+    prefixed = f"[fixture-sync] {subject}"
+    if not smtp_configured() or not EMAIL_TO_ADMIN.strip():
+        print(f"  Alert (admin email not configured): {prefixed}")
+        print(body)
+        return
+    send_email(prefixed, body, EMAIL_TO_ADMIN)
+
+
+def send_email_notification(fixture: dict) -> bool:
+    """Send an email notification about a new fixture."""
+    if not smtp_configured() or not EMAIL_TO.strip():
+        return False
+
+    home_team = translate_team_name(fixture["home_team"])
+    away_team = translate_team_name(fixture["away_team"])
+    subject = f"New Fixture: {home_team} vs {away_team}"
+    body_parts = [
+        f"A new fixture has been added to the calendar:\n",
+        f"Date: {fixture['date']}",
+        f"Kick-off: {fixture['time']}",
+        f"Match: {fixture['home_team']} vs {fixture['away_team']}",
+    ]
+    if fixture.get("venue"):
+        body_parts.append(f"Venue: {fixture['venue']}")
+    if fixture.get("competition"):
+        body_parts.append(f"Competition: {fixture['competition']}")
+    append_detail_url(body_parts, fixture)
+    return send_email(subject, "\n".join(body_parts), EMAIL_TO)
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -343,8 +360,12 @@ def save_synced_fixtures(synced: dict) -> None:
         json.dump(synced, f, indent=2)
 
 
-def fetch_fixtures(url: str) -> list[dict]:
-    """Fetch fixtures from an FA Full-Time fixtures page."""
+def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
+    """Fetch fixtures from an FA Full-Time fixtures page.
+
+    Returns (fixtures, None) on success, or (None, error) if the page could not
+    be loaded or the fixtures table is missing (as opposed to a valid empty list).
+    """
     print(f"Polling FA Full-Time: {url[:80]}...")
 
     try:
@@ -372,17 +393,20 @@ def fetch_fixtures(url: str) -> list[dict]:
             fixtures_table = soup.find("div", class_="fixtures-table")
             if not fixtures_table:
                 print("  No fixtures table found on page")
-                return []
+                browser.close()
+                return None, "No fixtures table found on page (FA layout change or Cloudflare?)"
 
             table = fixtures_table.find("table")
             if not table:
                 print("  No table found in fixtures-table div")
-                return []
+                browser.close()
+                return None, "No table found in fixtures-table div"
 
             tbody = table.find("tbody")
             if not tbody:
                 print("  No tbody found in table")
-                return []
+                browser.close()
+                return None, "No tbody found in fixtures table"
 
             for row in tbody.find_all("tr"):
                 try:
@@ -472,11 +496,11 @@ def fetch_fixtures(url: str) -> list[dict]:
             # Use VENUE_ADDRESSES env var for manual address mapping instead
             
             browser.close()
-            return fixtures
+            return fixtures, None
 
     except Exception as e:
         print(f"  Error fetching fixtures: {e}")
-        return []
+        return None, str(e)
 
 
 def parse_fixture_datetime(date_str: str, time_str: str) -> datetime | None:
@@ -621,17 +645,13 @@ def update_calendar_event(service, calendar_id: str, event_id: str, fixture: dic
         return False
 
 
-def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> None:
-    """Sync fixtures to Google Calendar, creating or updating as needed.
-    
-    Args:
-        all_fixtures: List of (url_index, fixture) tuples
-    """
+def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> list[str]:
+    """Sync fixtures to Google Calendar and Spond. Returns error messages."""
+    errors: list[str] = []
     if not all_fixtures:
         print("No fixtures found to sync.")
-        return
+        return errors
 
-    # Get calendar service (optional - may be None if not configured)
     service = get_calendar_service()
 
     synced = load_synced_fixtures()
@@ -639,74 +659,117 @@ def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> None:
     updated_count = 0
 
     for url_index, fixture in all_fixtures:
-        # Get the calendar ID for this URL index (optional)
         calendar_id = ""
         if url_index < len(CALENDAR_IDS):
             calendar_id = CALENDAR_IDS[url_index].strip()
 
         date_key = get_fixture_date_key(fixture, url_index)
         fixture_hash = get_fixture_hash(fixture)
+        label = f"{fixture['home_team']} vs {fixture['away_team']} on {fixture['date']}"
 
         if date_key in synced:
-            # We have a fixture for this date already
             existing = synced[date_key]
             
             if existing["hash"] == fixture_hash:
-                # No changes
-                print(f"  Unchanged: {fixture['home_team']} vs {fixture['away_team']} on {fixture['date']}")
+                print(f"  Unchanged: {label}")
                 continue
             
-            # Details changed - update the calendar event if configured
             print(f"  Fixture changed for {fixture['date']} - updating...")
             if service and calendar_id and existing.get("event_id"):
-                update_calendar_event(service, calendar_id, existing["event_id"], fixture)
+                if not update_calendar_event(service, calendar_id, existing["event_id"], fixture):
+                    errors.append(f"Calendar update failed: {label}")
             synced[date_key] = {"event_id": existing.get("event_id", ""), "hash": fixture_hash}
             updated_count += 1
         else:
-            # New fixture
             event_id = ""
             if service and calendar_id:
                 event_id = create_calendar_event(service, calendar_id, fixture) or ""
+                if not event_id:
+                    errors.append(f"Calendar create failed: {label}")
             
             synced[date_key] = {"event_id": event_id, "hash": fixture_hash}
             new_count += 1
             
-            # Send email notification for new fixtures
             send_email_notification(fixture)
             
-            # Create Spond event if configured
             if url_index < len(SPOND_GROUP_IDS):
                 spond_group_id = SPOND_GROUP_IDS[url_index].strip()
                 if spond_group_id:
                     spond_host_id = ""
                     if url_index < len(SPOND_HOST_IDS):
                         spond_host_id = SPOND_HOST_IDS[url_index].strip()
-                    create_spond_event_sync(fixture, spond_group_id, spond_host_id)
+                    if not create_spond_event_sync(fixture, spond_group_id, spond_host_id):
+                        errors.append(f"Spond create failed: {label}")
 
     if not DRY_RUN:
         save_synced_fixtures(synced)
     print(f"Sync complete. Added {new_count} new, updated {updated_count} existing.")
+    return errors
+
+
+def last_run_path() -> Path:
+    return Path(DATA_DIR) / "last_run"
+
+
+def mark_job_ran() -> None:
+    """Touch last_run so Docker HEALTHCHECK knows the poll loop is alive."""
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+    last_run_path().write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+
+
+def ping_healthchecks() -> None:
+    """Tell Healthchecks.io (or similar) that this process still completed a poll."""
+    if not HEALTHCHECKS_PING_URL:
+        return
+    try:
+        req = urllib.request.Request(HEALTHCHECKS_PING_URL, method="GET")
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+        print("  Healthchecks ping sent")
+    except Exception as e:
+        print(f"  Healthchecks ping failed: {e}")
 
 
 def job():
     """Main job that fetches all fixtures and syncs them."""
+    global _last_poll_had_errors
     print(f"\n{'='*60}")
     print(f"Running fixture sync at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}")
 
-    all_fixtures = []  # List of (url_index, fixture) tuples
+    errors: list[str] = []
+    all_fixtures: list[tuple[int, dict]] = []
 
-    for url_index, url in enumerate(FIXTURE_URLS):
-        url = url.strip()
-        if not url:
-            continue
-        fixtures = fetch_fixtures(url)
-        # Tag each fixture with its source URL index
-        for fixture in fixtures:
-            all_fixtures.append((url_index, fixture))
+    try:
+        for url_index, url in enumerate(FIXTURE_URLS):
+            url = url.strip()
+            if not url:
+                continue
+            fixtures, fetch_error = fetch_fixtures(url)
+            if fetch_error:
+                errors.append(f"Fetch failed (URL {url_index + 1}): {fetch_error}\n{url}")
+                continue
+            for fixture in fixtures or []:
+                all_fixtures.append((url_index, fixture))
 
-    print(f"\nTotal fixtures found: {len(all_fixtures)}")
-    sync_to_calendar(all_fixtures)
+        print(f"\nTotal fixtures found: {len(all_fixtures)}")
+        errors.extend(sync_to_calendar(all_fixtures))
+    except Exception:
+        errors.append(traceback.format_exc())
+
+    if errors:
+        send_alert("Fixture sync failed", "\n\n".join(errors))
+        _last_poll_had_errors = True
+    else:
+        if _last_poll_had_errors:
+            send_alert(
+                "Fixture sync recovered",
+                "The latest poll completed without errors.",
+            )
+        _last_poll_had_errors = False
+
+    mark_job_ran()
+    ping_healthchecks()
 
 
 def validate_config() -> bool:
@@ -770,6 +833,18 @@ if __name__ == "__main__":
         print(f"Team translations: {len(TEAM_NAMES)} configured")
     if TEAM_COLOURS:
         print(f"Team colours: {len(TEAM_COLOURS)} configured")
+    if EMAIL_TO.strip() and smtp_configured():
+        print("Fixture emails: configured")
+    else:
+        print("Fixture emails: not configured")
+    if EMAIL_TO_ADMIN.strip() and smtp_configured():
+        print("Alerts: admin email on poll/sync failure (and recovery)")
+    else:
+        print("Alerts: admin email not configured (failures logged only)")
+    if HEALTHCHECKS_PING_URL:
+        print("Healthchecks.io: ping URL configured")
+    else:
+        print("Healthchecks.io: not configured (no crash/dead-host email)")
     google_api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
     if google_api_key:
         print(f"Google Maps API: configured (accurate geocoding)")
