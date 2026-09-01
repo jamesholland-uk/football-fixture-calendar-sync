@@ -75,6 +75,14 @@ TEAM_NAMES = load_team_names()
 TEAM_COLOURS = load_team_colours()
 
 
+def append_detail_url(parts: list[str], fixture: dict) -> None:
+    """Append the FA Full-Time fixture page URL, if we scraped one from the list."""
+    url = (fixture.get("detail_url") or "").strip()
+    if url:
+        parts.append("")
+        parts.append(url)
+
+
 def send_email_notification(fixture: dict) -> bool:
     """Send an email notification about a new fixture."""
     if not all([SMTP_USER, SMTP_PASSWORD, EMAIL_FROM, EMAIL_TO]):
@@ -97,6 +105,7 @@ def send_email_notification(fixture: dict) -> bool:
             body_parts.append(f"Venue: {fixture['venue']}")
         if fixture.get("competition"):
             body_parts.append(f"Competition: {fixture['competition']}")
+        append_detail_url(body_parts, fixture)
         
         body = "\n".join(body_parts)
         
@@ -192,6 +201,7 @@ async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") ->
             description_parts.append(f"Venue: {fixture['venue']}")
         if fixture.get("competition"):
             description_parts.append(f"Competition: {fixture['competition']}")
+        append_detail_url(description_parts, fixture)
         description = "\n".join(description_parts)
         
         # Build location - try geocoding for clickable map links
@@ -548,6 +558,7 @@ def build_calendar_event(fixture: dict) -> dict | None:
         description_parts.append(f"Venue: {fixture['venue']}")
     if fixture.get("competition"):
         description_parts.append(f"Competition: {fixture['competition']}")
+    append_detail_url(description_parts, fixture)
 
     description = "\n".join(description_parts)
 
