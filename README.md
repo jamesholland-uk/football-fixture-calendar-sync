@@ -12,6 +12,7 @@ There is no official FA API. The container uses a headless browser to load the f
 - Updates existing calendar events when kick-off, opponent, or venue changes
 - Email notifications for newly found fixtures
 - Short team names in event titles (`TEAM_NAMES`)
+- Home/away kit colours on Spond match events (`TEAM_COLOURS`)
 - Dry-run mode (geocode and log, do not create events or write state)
 - Docker / Dockge deployment; credentials stay on the host via bind mount
 
@@ -75,6 +76,7 @@ Dockge: new stack from `compose.yaml`, put `service_account.json` and `.env` on 
 | `POLL_INTERVAL_HOURS` | How often to poll | `12` |
 | `TZ` | Timezone for local kick-off times | `Europe/London` |
 | `TEAM_NAMES` | `Full FA name:Short,Other:Short` | none |
+| `TEAM_COLOURS` | `Full FA name:home:away` kit colours for Spond. Names (`white`) or quoted hex (`"#ffffff:#8000ff"` — unquoted `#` is a `.env` comment). Opponent colour is omitted | none |
 | `SMTP_*` / `EMAIL_FROM` / `EMAIL_TO` | Email on new fixtures | off if blank |
 | `SPOND_EMAIL` / `SPOND_PASSWORD` | Spond login | off if blank |
 | `SPOND_GROUP_IDS` | Group IDs, one per URL, same order | off |
@@ -91,7 +93,7 @@ You must configure Calendar and/or Spond. Either output can be omitted.
 2. **Parse** date, time, home/away, venue, competition
 3. **Dedupe** by date + URL index; hash details to detect updates
 4. **Calendar** (if configured): event from 30 minutes before KO, 90 minutes long, no default reminders, short team names in the title
-5. **Spond** (if configured): match event at KO, 60 minutes, meetup 30 minutes before, all group members invited, location geocoded for a tappable map pin
+5. **Spond** (if configured): match event at KO, 60 minutes, meetup 30 minutes before, all group members invited, location geocoded for a tappable map pin. If `TEAM_COLOURS` matches the FA team name, `teamColour` is set to the home or away kit and `opponentColour` is left unset.
 6. **Email** (if configured): send when a fixture is first seen
 
 ### Venue geocoding (Spond)
@@ -119,14 +121,14 @@ pip install -r requirements.txt   # or at least: ddgs spond
 |---|---|
 | `test_geo_comparison.py` | Compare Nominatim / Google / postcode methods |
 | `test_geo_chosen.py` | Run the production pipeline; prints Maps links for each pin |
-| `test_spond_locations.py` | Preview or `--create` labelled `[TEST GEO]` Spond events (invites only you) |
+| `test_spond_locations.py` | Preview or `--create` labelled `[TEST GEO]` Spond **matches** (HOME/AWAY, kit colours, invites only you) |
 
 `test-data.csv` columns: venue name, true address (scoring only), optional team name.
 
 ```bash
 .venv/bin/python test_geo_chosen.py --google-api-key "$GOOGLE_MAPS_API_KEY"
 .venv/bin/python test_spond_locations.py          # preview
-.venv/bin/python test_spond_locations.py --create # real Spond events
+.venv/bin/python test_spond_locations.py --create # real Spond matches
 ```
 
 ## Troubleshooting

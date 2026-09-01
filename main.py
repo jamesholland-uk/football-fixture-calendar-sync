@@ -19,6 +19,7 @@ from googleapiclient.errors import HttpError
 from spond import spond
 
 from geocoding import geocode_venue
+from team_colours import kit_colour_for_fixture, load_team_colours
 
 # Configuration from environment variables
 FIXTURE_URLS = os.environ.get("FIXTURE_URLS", "").split(",")
@@ -71,6 +72,7 @@ def load_team_names() -> dict[str, str]:
 
 
 TEAM_NAMES = load_team_names()
+TEAM_COLOURS = load_team_colours()
 
 
 def send_email_notification(fixture: dict) -> bool:
@@ -167,8 +169,13 @@ async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") ->
         away_team_translated = translate_team_name(fixture["away_team"])
         ko_time = kickoff_dt.strftime("%H:%M")
         
-        # Determine if home or away (if our team name was translated, that's our team)
-        is_home = home_team_translated != fixture["home_team"]
+        # Determine if home or away. TEAM_COLOURS names are our teams; otherwise
+        # a TEAM_NAMES translation of the home side is used as a heuristic.
+        kit_colour, coloured_home = kit_colour_for_fixture(fixture, TEAM_COLOURS)
+        if coloured_home is not None:
+            is_home = coloured_home
+        else:
+            is_home = home_team_translated != fixture["home_team"]
         match_type = "HOME" if is_home else "AWAY"
         opponent = fixture["away_team"] if is_home else fixture["home_team"]
         
@@ -239,6 +246,10 @@ async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") ->
             },
         }
         
+        # Our kit only — omit opponentColour; we do not know the other team's kit
+        if kit_colour:
+            event_data["matchInfo"]["teamColour"] = kit_colour
+        
         # Set event host/owner if specified
         if host_id:
             event_data["owners"] = [{"id": host_id}]
@@ -247,6 +258,8 @@ async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") ->
         if DRY_RUN:
             print(f"  [DRY RUN] Would create Spond event: {heading}")
             print(f"  [DRY RUN] Location: {location}")
+            if kit_colour:
+                print(f"  [DRY RUN] teamColour: {kit_colour} ({match_type})")
             await s.clientsession.close()
             return True
         
@@ -256,6 +269,8 @@ async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") ->
             if r.ok:
                 result = await r.json()
                 print(f"  Created Spond event: {heading}")
+                if kit_colour:
+                    print(f"  teamColour: {kit_colour} ({match_type})")
                 await s.clientsession.close()
                 return True
             else:
@@ -742,6 +757,8 @@ if __name__ == "__main__":
     print(f"Data Directory: {DATA_DIR}")
     if TEAM_NAMES:
         print(f"Team translations: {len(TEAM_NAMES)} configured")
+    if TEAM_COLOURS:
+        print(f"Team colours: {len(TEAM_COLOURS)} configured")
     google_api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
     if google_api_key:
         print(f"Google Maps API: configured (accurate geocoding)")

@@ -16,6 +16,8 @@ services:
       - TZ=${TZ:-Europe/London}
       # Team name translations (Full Name:Short,Full Name 2:Short 2)
       - TEAM_NAMES=${TEAM_NAMES:-}
+      # Kit colours for Spond (Full Name:home:away) — hex or names; opponent colour omitted
+      - TEAM_COLOURS=${TEAM_COLOURS:-}
       # Email notifications (optional - leave blank to disable)
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
