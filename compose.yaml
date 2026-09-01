@@ -7,7 +7,7 @@ services:
       # Comma-separated list of FA Full-Time fixture URLs to poll
       - FIXTURE_URLS=${FIXTURE_URLS}
       # Comma-separated list of Google Calendar IDs (one per fixture URL, in same order)
-      - CALENDAR_IDS=${CALENDAR_IDS}
+      - CALENDAR_IDS=${CALENDAR_IDS:-}
       # Path to service account credentials (inside container)
       - SERVICE_ACCOUNT_FILE=/app/service_account.json
       # How often to poll for fixture updates (in hours)
@@ -23,6 +23,16 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - EMAIL_FROM=${EMAIL_FROM:-}
       - EMAIL_TO=${EMAIL_TO:-}
+      # Spond integration (optional - leave blank to disable)
+      - SPOND_EMAIL=${SPOND_EMAIL:-}
+      - SPOND_PASSWORD=${SPOND_PASSWORD:-}
+      - SPOND_GROUP_IDS=${SPOND_GROUP_IDS:-}
+      - SPOND_HOST_IDS=${SPOND_HOST_IDS:-}
+      # Google Maps API key for Spond pins (Geocoding + Places APIs)
+      # Get a key at: https://console.cloud.google.com/google/maps-apis/credentials
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      # Dry run mode - test without creating events (true/false)
+      - DRY_RUN=${DRY_RUN:-false}
       # Data directory for persistence
       - DATA_DIR=/app/data
     volumes:

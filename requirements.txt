@@ -4,3 +4,5 @@ google-api-python-client>=2.126.0
 google-auth>=2.29.0
 lxml>=5.1.0
 playwright>=1.40.0
+spond>=1.2.1
+ddgs>=7.0.0

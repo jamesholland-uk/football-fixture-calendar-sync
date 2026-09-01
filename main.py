@@ -3,10 +3,12 @@ import time
 import json
 import hashlib
 import smtplib
+import asyncio
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 import schedule
@@ -14,6 +16,9 @@ from playwright.sync_api import sync_playwright
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from spond import spond
+
+from geocoding import geocode_venue
 
 # Configuration from environment variables
 FIXTURE_URLS = os.environ.get("FIXTURE_URLS", "").split(",")
@@ -27,6 +32,7 @@ TZ = os.environ.get("TZ", "Europe/London")
 # Example: "Boldmere St Michaels Juniors U11 2015 JH:Mikes,Other Team U12:Owls"
 TEAM_NAMES_RAW = os.environ.get("TEAM_NAMES", "")
 
+
 # Email notification settings (optional)
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
@@ -34,6 +40,15 @@ SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "")
 EMAIL_TO = os.environ.get("EMAIL_TO", "")  # Comma-separated for multiple recipients
+
+# Spond integration (optional)
+SPOND_EMAIL = os.environ.get("SPOND_EMAIL", "")
+SPOND_PASSWORD = os.environ.get("SPOND_PASSWORD", "")
+SPOND_GROUP_IDS = os.environ.get("SPOND_GROUP_IDS", "").split(",")  # One per fixture URL
+SPOND_HOST_IDS = os.environ.get("SPOND_HOST_IDS", "").split(",")  # One per fixture URL (optional)
+
+# Dry run mode - test without creating events
+DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("true", "1", "yes")
 
 
 def load_team_names() -> dict[str, str]:
@@ -108,6 +123,159 @@ def send_email_notification(fixture: dict) -> bool:
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
+async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") -> bool:
+    """Create a Spond event for a fixture."""
+    if not all([SPOND_EMAIL, SPOND_PASSWORD, group_id]):
+        return False  # Spond not configured
+    
+    try:
+        s = spond.Spond(username=SPOND_EMAIL, password=SPOND_PASSWORD)
+        
+        # Authenticate first
+        await s.login()
+        
+        # Fetch group to get member IDs
+        groups = await s.get_groups()
+        group_data = next((g for g in groups if g["id"] == group_id), None)
+        if not group_data:
+            print(f"  Spond group {group_id} not found")
+            await s.clientsession.close()
+            return False
+        
+        # Get all member IDs from the group (as objects with id field)
+        member_ids = [{"id": m["id"]} for m in group_data.get("members", [])]
+        group_name = group_data.get("name", "")
+        
+        # Parse fixture datetime
+        kickoff_dt = parse_fixture_datetime(fixture["date"], fixture["time"])
+        if not kickoff_dt:
+            return False
+        
+        # Start at kick-off time, end 60 mins after kick-off (match duration)
+        start_dt = kickoff_dt
+        end_dt = kickoff_dt + timedelta(minutes=60)
+        
+        # Convert local time to UTC for Spond API (timestamps must be UTC with Z suffix)
+        local_tz = ZoneInfo(TZ)
+        start_dt_local = start_dt.replace(tzinfo=local_tz)
+        end_dt_local = end_dt.replace(tzinfo=local_tz)
+        start_dt_utc = start_dt_local.astimezone(timezone.utc)
+        end_dt_utc = end_dt_local.astimezone(timezone.utc)
+        
+        # Translate team names for title
+        home_team_translated = translate_team_name(fixture["home_team"])
+        away_team_translated = translate_team_name(fixture["away_team"])
+        ko_time = kickoff_dt.strftime("%H:%M")
+        
+        # Determine if home or away (if our team name was translated, that's our team)
+        is_home = home_team_translated != fixture["home_team"]
+        match_type = "HOME" if is_home else "AWAY"
+        opponent = fixture["away_team"] if is_home else fixture["home_team"]
+        
+        # Build event heading
+        heading = f"{home_team_translated} vs {away_team_translated} - KO {ko_time}"
+        
+        # Build description
+        description_parts = [
+            f"Kick-off: {ko_time}",
+            f"Home: {fixture['home_team']}",
+            f"Away: {fixture['away_team']}",
+        ]
+        if fixture.get("venue"):
+            description_parts.append(f"Venue: {fixture['venue']}")
+        if fixture.get("competition"):
+            description_parts.append(f"Competition: {fixture['competition']}")
+        description = "\n".join(description_parts)
+        
+        # Build location - try geocoding for clickable map links
+        location = {}
+        venue_raw = fixture.get("venue", "")
+        if venue_raw:
+            venue = venue_raw
+            # Remove time suffix if present (e.g., "VENUE NAME - 11:00AM" -> "VENUE NAME")
+            if " - " in venue:
+                venue = venue.split(" - ")[0]
+            
+            # For away games, pass opponent team as geocoding hint
+            opponent_hint = ""
+            if not is_home:
+                opponent_hint = fixture.get("home_team", "")  # Away game = at opponent's ground
+            
+            geocoded = geocode_venue(venue, opponent_hint)
+            
+            if geocoded:
+                location = geocoded
+                print(f"  Geocoded: {venue} -> {geocoded.get('addressLine', 'found')}")
+            else:
+                # Fall back to plain text
+                print(f"  Geocoding failed, using plain text: {venue}")
+                location = {"feature": venue}
+        
+        # Build Spond event payload for a match event
+        event_data = {
+            "heading": heading,
+            "description": description,
+            "spondType": "EVENT",
+            "startTimestamp": start_dt_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "endTimestamp": end_dt_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "meetupPrior": 30,  # Meet 30 minutes before start
+            "matchEvent": True,
+            "matchInfo": {
+                "teamName": group_name,
+                "opponentName": opponent,
+                "type": match_type,
+            },
+            "commentsDisabled": False,
+            "maxAccepted": 0,
+            "rsvpDate": None,
+            "location": location,
+            "visibility": "INVITEES",
+            "participantsHidden": False,
+            "autoReminderType": "DISABLED",
+            "autoAccept": False,
+            "attachments": [],
+            "recipients": {
+                "group": {"id": group_id, "members": member_ids},
+            },
+        }
+        
+        # Set event host/owner if specified
+        if host_id:
+            event_data["owners"] = [{"id": host_id}]
+        
+        # Dry run mode - skip actual creation
+        if DRY_RUN:
+            print(f"  [DRY RUN] Would create Spond event: {heading}")
+            print(f"  [DRY RUN] Location: {location}")
+            await s.clientsession.close()
+            return True
+        
+        # POST to create event
+        url = f"{s.api_url}sponds/"
+        async with s.clientsession.post(url, json=event_data, headers=s.auth_headers) as r:
+            if r.ok:
+                result = await r.json()
+                print(f"  Created Spond event: {heading}")
+                await s.clientsession.close()
+                return True
+            else:
+                error = await r.text()
+                print(f"  Failed to create Spond event: {r.status} - {error}")
+                await s.clientsession.close()
+                return False
+                
+    except Exception as e:
+        print(f"  Failed to create Spond event: {e}")
+        return False
+
+
+def create_spond_event_sync(fixture: dict, group_id: str, host_id: str = "") -> bool:
+    """Synchronous wrapper for create_spond_event."""
+    if not all([SPOND_EMAIL, SPOND_PASSWORD, group_id]):
+        return False
+    return asyncio.run(create_spond_event(fixture, group_id, host_id))
+
+
 def get_fixture_date_key(fixture: dict, url_index: int) -> str:
     """Generate a key for a fixture based on its date and source URL (one fixture per date per team)."""
     return f"{url_index}_{fixture['date']}"
@@ -171,103 +339,115 @@ def fetch_fixtures(url: str) -> list[dict]:
             
             # Get the page content
             html = page.content()
+            
+            # Parse fixtures from the page
+            soup = BeautifulSoup(html, "html.parser")
+
+            fixtures = []
+            fixtures_table = soup.find("div", class_="fixtures-table")
+            if not fixtures_table:
+                print("  No fixtures table found on page")
+                return []
+
+            table = fixtures_table.find("table")
+            if not table:
+                print("  No table found in fixtures-table div")
+                return []
+
+            tbody = table.find("tbody")
+            if not tbody:
+                print("  No tbody found in table")
+                return []
+
+            for row in tbody.find_all("tr"):
+                try:
+                    # Date/Time cell - contains two spans
+                    date_cell = row.find("td", class_="left")
+                    if not date_cell:
+                        continue
+
+                    date_link = date_cell.find("a")
+                    if not date_link:
+                        continue
+
+                    # Extract fixture detail URL
+                    fixture_url = ""
+                    href = date_link.get("href", "")
+                    if href:
+                        if href.startswith("http"):
+                            fixture_url = href
+                        else:
+                            fixture_url = f"https://fulltime.thefa.com{href}"
+
+                    spans = date_link.find_all("span")
+                    if len(spans) < 2:
+                        continue
+
+                    date_str = spans[0].get_text(strip=True)
+                    time_str = spans[1].get_text(strip=True)
+
+                    # Home team
+                    home_cell = row.find("td", class_="home-team")
+                    if not home_cell:
+                        continue
+                    home_team = home_cell.get_text(strip=True)
+
+                    # Away team
+                    away_cell = row.find("td", class_="road-team")
+                    if not away_cell:
+                        continue
+                    away_team = away_cell.get_text(strip=True)
+
+                    # Find venue - it's the cell after road-team
+                    venue = ""
+                    competition = ""
+                    
+                    all_cells = row.find_all("td")
+                    road_team_found = False
+                    venue_found = False
+                    
+                    for cell in all_cells:
+                        classes = cell.get("class", [])
+                        
+                        if "road-team" in classes:
+                            road_team_found = True
+                            continue
+                        
+                        if road_team_found and not venue_found:
+                            text = cell.get_text(strip=True)
+                            if text:
+                                venue = text
+                                venue_found = True
+                            continue
+                        
+                        if venue_found and not competition:
+                            text = cell.get_text(strip=True)
+                            if text:
+                                competition = text
+                                break
+
+                    fixture = {
+                        "date": date_str,
+                        "time": time_str if time_str else "TBC",
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "venue": venue,
+                        "competition": competition,
+                        "detail_url": fixture_url,
+                        "venue_address": None,
+                    }
+                    fixtures.append(fixture)
+                    print(f"  Found: {date_str} {time_str} - {home_team} vs {away_team}")
+
+                except Exception as e:
+                    print(f"  Error parsing row: {e}")
+                    continue
+
+            # Note: Detail page fetching disabled due to Cloudflare blocking
+            # Use VENUE_ADDRESSES env var for manual address mapping instead
+            
             browser.close()
-        
-        soup = BeautifulSoup(html, "html.parser")
-
-        fixtures = []
-        fixtures_table = soup.find("div", class_="fixtures-table")
-        if not fixtures_table:
-            print("  No fixtures table found on page")
-            return []
-
-        table = fixtures_table.find("table")
-        if not table:
-            print("  No table found in fixtures-table div")
-            return []
-
-        tbody = table.find("tbody")
-        if not tbody:
-            print("  No tbody found in table")
-            return []
-
-        for row in tbody.find_all("tr"):
-            try:
-                # Date/Time cell - contains two spans
-                date_cell = row.find("td", class_="left")
-                if not date_cell:
-                    continue
-
-                date_link = date_cell.find("a")
-                if not date_link:
-                    continue
-
-                spans = date_link.find_all("span")
-                if len(spans) < 2:
-                    continue
-
-                date_str = spans[0].get_text(strip=True)
-                time_str = spans[1].get_text(strip=True)
-
-                # Home team
-                home_cell = row.find("td", class_="home-team")
-                if not home_cell:
-                    continue
-                home_team = home_cell.get_text(strip=True)
-
-                # Away team
-                away_cell = row.find("td", class_="road-team")
-                if not away_cell:
-                    continue
-                away_team = away_cell.get_text(strip=True)
-
-                # Find venue - it's the cell after road-team
-                # The structure is: type | date | home | logo | vs | logo | away | venue | competition | status
-                venue = ""
-                competition = ""
-                
-                all_cells = row.find_all("td")
-                road_team_found = False
-                venue_found = False
-                
-                for cell in all_cells:
-                    classes = cell.get("class", [])
-                    
-                    if "road-team" in classes:
-                        road_team_found = True
-                        continue
-                    
-                    if road_team_found and not venue_found:
-                        # First cell after road-team is venue
-                        text = cell.get_text(strip=True)
-                        if text:
-                            venue = text
-                            venue_found = True
-                        continue
-                    
-                    if venue_found and not competition:
-                        # Next cell is competition
-                        text = cell.get_text(strip=True)
-                        if text:
-                            competition = text
-                            break
-
-                fixture = {
-                    "date": date_str,
-                    "time": time_str if time_str else "TBC",
-                    "home_team": home_team,
-                    "away_team": away_team,
-                    "venue": venue,
-                    "competition": competition,
-                }
-                fixtures.append(fixture)
-                print(f"  Found: {date_str} {time_str} - {home_team} vs {away_team}")
-
-            except Exception as e:
-                print(f"  Error parsing row: {e}")
-                continue
-
-        return fixtures
+            return fixtures
 
     except Exception as e:
         print(f"  Error fetching fixtures: {e}")
@@ -290,9 +470,15 @@ def parse_fixture_datetime(date_str: str, time_str: str) -> datetime | None:
 
 
 def get_calendar_service():
-    """Create and return a Google Calendar API service."""
+    """Create and return a Google Calendar API service. Returns None if not configured."""
+    # Check if any calendar IDs are configured
+    has_calendar_ids = any(cid.strip() for cid in CALENDAR_IDS)
+    if not has_calendar_ids:
+        return None  # Calendar not configured, skip silently
+    
     if not Path(SERVICE_ACCOUNT_FILE).exists():
-        print(f"ERROR: Service account file not found: {SERVICE_ACCOUNT_FILE}")
+        print(f"WARNING: Service account file not found: {SERVICE_ACCOUNT_FILE}")
+        print("  Google Calendar sync disabled.")
         return None
 
     try:
@@ -419,28 +605,18 @@ def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> None:
         print("No fixtures found to sync.")
         return
 
-    if not CALENDAR_IDS or CALENDAR_IDS == [""]:
-        print("ERROR: CALENDAR_IDS environment variable not set")
-        return
-
+    # Get calendar service (optional - may be None if not configured)
     service = get_calendar_service()
-    if not service:
-        return
 
     synced = load_synced_fixtures()
     new_count = 0
     updated_count = 0
 
     for url_index, fixture in all_fixtures:
-        # Get the calendar ID for this URL index
-        if url_index >= len(CALENDAR_IDS):
-            print(f"  ERROR: No calendar ID configured for URL index {url_index}")
-            continue
-        
-        calendar_id = CALENDAR_IDS[url_index].strip()
-        if not calendar_id:
-            print(f"  ERROR: Empty calendar ID for URL index {url_index}")
-            continue
+        # Get the calendar ID for this URL index (optional)
+        calendar_id = ""
+        if url_index < len(CALENDAR_IDS):
+            calendar_id = CALENDAR_IDS[url_index].strip()
 
         date_key = get_fixture_date_key(fixture, url_index)
         fixture_hash = get_fixture_hash(fixture)
@@ -454,21 +630,35 @@ def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> None:
                 print(f"  Unchanged: {fixture['home_team']} vs {fixture['away_team']} on {fixture['date']}")
                 continue
             
-            # Details changed - update the calendar event
-            print(f"  Fixture changed for {fixture['date']} - updating calendar...")
-            if update_calendar_event(service, calendar_id, existing["event_id"], fixture):
-                synced[date_key] = {"event_id": existing["event_id"], "hash": fixture_hash}
-                updated_count += 1
+            # Details changed - update the calendar event if configured
+            print(f"  Fixture changed for {fixture['date']} - updating...")
+            if service and calendar_id and existing.get("event_id"):
+                update_calendar_event(service, calendar_id, existing["event_id"], fixture)
+            synced[date_key] = {"event_id": existing.get("event_id", ""), "hash": fixture_hash}
+            updated_count += 1
         else:
             # New fixture
-            event_id = create_calendar_event(service, calendar_id, fixture)
-            if event_id:
-                synced[date_key] = {"event_id": event_id, "hash": fixture_hash}
-                new_count += 1
-                # Send email notification for new fixtures
-                send_email_notification(fixture)
+            event_id = ""
+            if service and calendar_id:
+                event_id = create_calendar_event(service, calendar_id, fixture) or ""
+            
+            synced[date_key] = {"event_id": event_id, "hash": fixture_hash}
+            new_count += 1
+            
+            # Send email notification for new fixtures
+            send_email_notification(fixture)
+            
+            # Create Spond event if configured
+            if url_index < len(SPOND_GROUP_IDS):
+                spond_group_id = SPOND_GROUP_IDS[url_index].strip()
+                if spond_group_id:
+                    spond_host_id = ""
+                    if url_index < len(SPOND_HOST_IDS):
+                        spond_host_id = SPOND_HOST_IDS[url_index].strip()
+                    create_spond_event_sync(fixture, spond_group_id, spond_host_id)
 
-    save_synced_fixtures(synced)
+    if not DRY_RUN:
+        save_synced_fixtures(synced)
     print(f"Sync complete. Added {new_count} new, updated {updated_count} existing.")
 
 
@@ -496,21 +686,36 @@ def job():
 def validate_config() -> bool:
     """Validate that required configuration is present."""
     errors = []
+    warnings = []
 
     if not FIXTURE_URLS or FIXTURE_URLS == [""]:
         errors.append("FIXTURE_URLS environment variable is not set")
 
-    if not CALENDAR_IDS or CALENDAR_IDS == [""]:
-        errors.append("CALENDAR_IDS environment variable is not set")
-
-    # Check that we have a calendar ID for each fixture URL
     url_count = len([u for u in FIXTURE_URLS if u.strip()])
-    cal_count = len([c for c in CALENDAR_IDS if c.strip()])
-    if url_count != cal_count:
-        errors.append(f"Mismatch: {url_count} fixture URLs but {cal_count} calendar IDs (must be equal)")
+    
+    # Check calendar configuration (optional)
+    has_calendar = any(c.strip() for c in CALENDAR_IDS)
+    if has_calendar:
+        cal_count = len([c for c in CALENDAR_IDS if c.strip()])
+        if url_count != cal_count:
+            errors.append(f"Mismatch: {url_count} fixture URLs but {cal_count} calendar IDs (must be equal)")
+        if not Path(SERVICE_ACCOUNT_FILE).exists():
+            errors.append(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
+    else:
+        warnings.append("Google Calendar sync disabled (no CALENDAR_IDS configured)")
 
-    if not Path(SERVICE_ACCOUNT_FILE).exists():
-        errors.append(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
+    # Check Spond configuration (optional)
+    has_spond = any(g.strip() for g in SPOND_GROUP_IDS)
+    if not has_spond:
+        warnings.append("Spond sync disabled (no SPOND_GROUP_IDS configured)")
+
+    # Must have at least one output configured
+    if not has_calendar and not has_spond:
+        errors.append("No outputs configured - set CALENDAR_IDS and/or SPOND_GROUP_IDS")
+
+    if warnings:
+        for warning in warnings:
+            print(f"  Note: {warning}")
 
     if errors:
         print("Configuration errors:")
@@ -526,13 +731,22 @@ if __name__ == "__main__":
     print("=" * 40)
     url_count = len([u for u in FIXTURE_URLS if u.strip()])
     cal_count = len([c for c in CALENDAR_IDS if c.strip()])
+    spond_count = len([g for g in SPOND_GROUP_IDS if g.strip()])
     print(f"Fixture URLs: {url_count} configured")
     print(f"Calendar IDs: {cal_count} configured")
+    print(f"Spond Groups: {spond_count} configured" if SPOND_EMAIL else "Spond: not configured")
+    if DRY_RUN:
+        print("DRY RUN MODE: No events will be created")
     print(f"Poll Interval: every {POLL_INTERVAL_HOURS} hour(s)")
     print(f"Timezone: {TZ}")
     print(f"Data Directory: {DATA_DIR}")
     if TEAM_NAMES:
         print(f"Team translations: {len(TEAM_NAMES)} configured")
+    google_api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    if google_api_key:
+        print(f"Google Maps API: configured (accurate geocoding)")
+    else:
+        print("Google Maps API: not configured (using postcode fallback)")
     print("=" * 40)
 
     if not validate_config():
