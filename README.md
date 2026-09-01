@@ -1,195 +1,150 @@
 # Football Fixture Calendar Sync
 
-Automatically sync youth football fixtures from FA Full-Time to Google Calendar.
+Poll FA Full-Time for youth football fixtures and create **Google Calendar** and/or **Spond** events when new matches appear.
 
-This Docker container polls the FA Full-Time website for fixture updates and creates Google Calendar events for new matches. It runs on a schedule (default: daily at 08:00) and tracks which fixtures have already been synced to avoid duplicates.
+There is no official FA API. The container uses a headless browser to load the fixtures page, then syncs new or changed fixtures on a repeating interval.
 
 ## Features
 
-- Scrapes fixtures from FA Full-Time team pages
-- Creates Google Calendar events with match details
-- Supports multiple teams/fixture URLs
-- Avoids duplicate calendar entries
-- Persists state across container restarts
-- Configurable poll schedule and timezone
+- Scrapes FA Full-Time fixture lists (Playwright, to get past Cloudflare)
+- Optional Google Calendar sync (one calendar per fixture URL)
+- Optional Spond match events (one group per fixture URL), with clickable map pins
+- Updates existing calendar events when kick-off, opponent, or venue changes
+- Email notifications for newly found fixtures
+- Short team names in event titles (`TEAM_NAMES`)
+- Dry-run mode (geocode and log, do not create events or write state)
+- Docker / Dockge deployment; credentials stay on the host via bind mount
 
-## Prerequisites
+## What you need
 
-1. **Docker** (and optionally Docker Compose / Dockge)
-2. **Google Cloud Service Account** with Calendar API access
-3. **FA Full-Time fixture URL(s)** for your team(s)
+1. **Docker** (and Docker Compose or Dockge)
+2. **FA Full-Time fixture URL(s)** for each team
+3. At least one output:
+   - Google Calendar (service account JSON + calendar IDs), and/or
+   - Spond (email, password, group IDs)
+4. **Google Maps API key** (strongly recommended for Spond locations): enable **Geocoding API** and **Places API**
 
 ## Setup
 
-### 1. Get Your FA Full-Time Fixture URL
+### 1. FA Full-Time URL
 
-1. Go to [FA Full-Time](https://fulltime.thefa.com/)
-2. Search for your league and navigate to your team
-3. Go to the **Fixtures** page
-4. Use the filters to select your team
-5. Copy the full URL from your browser's address bar
+Open [FA Full-Time](https://fulltime.thefa.com/), filter to your team’s fixtures, copy the browser URL.
 
-Example URL:
-```
-https://fulltime.thefa.com/fixtures.html?selectedSeason=357645222&selectedFixtureGroupAgeGroup=12&selectedClub=950375314&selectedTeam=42648016&selectedRelatedFixtureOption=2&selectedDateCode=all
-```
+### 2. Google Calendar (optional)
 
-### 2. Create a Google Cloud Service Account
+1. In [Google Cloud Console](https://console.cloud.google.com/), enable **Google Calendar API**
+2. Create a service account, download a JSON key as `service_account.json`
+3. Share each calendar with the service account `client_email` as **Make changes to events**
+4. Copy Calendar IDs from calendar settings → Integrate calendar
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or select an existing one)
-3. Enable the **Google Calendar API**:
-   - Go to APIs & Services → Library
-   - Search for "Google Calendar API"
-   - Click Enable
-4. Create a Service Account:
-   - Go to APIs & Services → Credentials
-   - Click "Create Credentials" → "Service Account"
-   - Give it a name (e.g., "fixture-calendar-sync")
-   - Click Create and Continue
-   - Skip the optional steps and click Done
-5. Create a key for the service account:
-   - Click on the service account you just created
-   - Go to the "Keys" tab
-   - Click "Add Key" → "Create new key"
-   - Select JSON and click Create
-   - Save the downloaded file as `service_account.json`
+Do not bake `service_account.json` into the image. Bind-mount it (see `compose.yaml`).
 
-### 3. Share Your Calendar with the Service Account
+### 3. Spond (optional)
 
-1. Open [Google Calendar](https://calendar.google.com/)
-2. Find your calendar in the left sidebar
-3. Click the three dots → "Settings and sharing"
-4. Scroll to "Share with specific people or groups"
-5. Click "Add people and groups"
-6. Enter the service account email (found in your `service_account.json` as `client_email`)
-7. Set permission to "Make changes to events"
-8. Click Send
+1. Use the Spond account that can create events in the group
+2. Group ID is the last segment of the group URL, e.g. `https://spond.com/landing/group/ABCD1234` → `ABCD1234`
+3. Optional host IDs: the member `id` of the coach/manager who should own the event (from Spond network requests, not `clubMembershipId`)
 
-### 4. Get Your Calendar ID
+### 4. Maps key (for Spond pins)
 
-1. In Google Calendar settings for your calendar
-2. Scroll to "Integrate calendar"
-3. Copy the **Calendar ID**
-   - For your primary calendar, this is your email address
-   - For other calendars, it looks like: `abc123@group.calendar.google.com`
+1. [Credentials](https://console.cloud.google.com/google/maps-apis/credentials)
+2. Enable **Geocoding API** and **Places API**
+3. Restrict the key to those APIs if you can
+4. Set `GOOGLE_MAPS_API_KEY` in `.env`
 
-### 5. Configure the Container
+Without a key, Spond still gets a venue name, but pins fall back to postcode centroids and are often tens or hundreds of metres off. Places is what matches the Google Maps app pin for named grounds (e.g. Castle Vale Stadium).
 
-1. Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Edit `.env` with your values:
-   ```bash
-   # Single team
-   FIXTURE_URLS=https://fulltime.thefa.com/fixtures.html?selectedSeason=XXX&selectedTeam=YYY
-
-   # Multiple teams (comma-separated)
-   FIXTURE_URLS=https://fulltime.thefa.com/fixtures.html?team1,https://fulltime.thefa.com/fixtures.html?team2
-
-   CALENDAR_ID=your_calendar_id@group.calendar.google.com
-   POLL_SCHEDULE=08:00
-   TZ=Europe/London
-   ```
-
-3. Place your `service_account.json` in the project directory
-
-### 6. Deploy
-
-#### Using Docker Compose
+### 5. Configure and run
 
 ```bash
-docker compose up -d
+cp .env.example .env
+# Edit .env — see the table below
+docker compose up -d --build
+docker compose logs -f
 ```
 
-#### Using Dockge
-
-1. Create a new stack in Dockge
-2. Paste the contents of `compose.yaml`
-3. Set the environment variables
-4. Ensure you have:
-   - `service_account.json` in the stack directory
-   - A `data/` directory for persistence (will be created automatically)
-5. Deploy the stack
+Dockge: new stack from `compose.yaml`, put `service_account.json` and `.env` on the host, deploy.
 
 ## Configuration
 
-| Environment Variable | Description | Default |
-|---------------------|-------------|---------|
-| `FIXTURE_URLS` | Comma-separated FA Full-Time fixture URLs | (required) |
-| `CALENDAR_ID` | Google Calendar ID to add events to | (required) |
-| `SERVICE_ACCOUNT_FILE` | Path to service account JSON | `/app/service_account.json` |
-| `POLL_SCHEDULE` | Time to run daily poll (24h format) | `08:00` |
-| `TZ` | Timezone for calendar events | `Europe/London` |
-| `DATA_DIR` | Directory for persistence data | `/app/data` |
+| Variable | Description | Default |
+|---|---|---|
+| `FIXTURE_URLS` | Comma-separated FA Full-Time fixture URLs | required |
+| `CALENDAR_IDS` | Calendar IDs, one per URL, same order. Empty = no Calendar sync | off |
+| `SERVICE_ACCOUNT_FILE` | Path to service account JSON in the container | `/app/service_account.json` |
+| `POLL_INTERVAL_HOURS` | How often to poll | `12` |
+| `TZ` | Timezone for local kick-off times | `Europe/London` |
+| `TEAM_NAMES` | `Full FA name:Short,Other:Short` | none |
+| `SMTP_*` / `EMAIL_FROM` / `EMAIL_TO` | Email on new fixtures | off if blank |
+| `SPOND_EMAIL` / `SPOND_PASSWORD` | Spond login | off if blank |
+| `SPOND_GROUP_IDS` | Group IDs, one per URL, same order | off |
+| `SPOND_HOST_IDS` | Event owner member IDs, one per URL | your Spond user |
+| `GOOGLE_MAPS_API_KEY` | Geocoding + Places for Spond locations | postcode fallback |
+| `DRY_RUN` | `true` = no Calendar/Spond writes and no `synced_fixtures.json` update | `false` |
+| `DATA_DIR` | Persistence directory | `/app/data` |
 
-## How It Works
+You must configure Calendar and/or Spond. Either output can be omitted.
 
-1. **Polling**: The container fetches fixtures from the configured FA Full-Time URLs at the scheduled time
-2. **Parsing**: It extracts match details (date, time, teams, venue) from the page HTML
-3. **Deduplication**: Each fixture is assigned a unique ID based on its details. Already-synced fixtures are skipped
-4. **Calendar Creation**: New fixtures are added to Google Calendar with:
-   - Summary: `⚽ Home Team vs Away Team`
-   - Location: Venue (if available)
-   - Duration: 2 hours
-   - Description: Full match details
+## How it works
 
-## Logs
+1. **Poll** each fixture URL with Playwright
+2. **Parse** date, time, home/away, venue, competition
+3. **Dedupe** by date + URL index; hash details to detect updates
+4. **Calendar** (if configured): event from 30 minutes before KO, 90 minutes long, no default reminders, short team names in the title
+5. **Spond** (if configured): match event at KO, 60 minutes, meetup 30 minutes before, all group members invited, location geocoded for a tappable map pin
+6. **Email** (if configured): send when a fixture is first seen
 
-View container logs to see sync activity:
+### Venue geocoding (Spond)
+
+Implemented in `geocoding.py`. Inputs are the FA venue name and, for away games, the opponent team name — never a hand-copied street address.
+
+1. Web-search for a UK postcode (snippet must mention the venue)
+2. Google Geocoding of the venue name (pitch codes like `CV2` stripped)
+3. If that is only a town or a street that does not name the venue, **Places Find Place** (Maps-app POI)
+4. Same full postcode → Google/Places pin; same district but different unit → web postcode; different district → Google (web search is noisier)
+
+CSV address distance is a rough check only. The real test is tapping the location in the Spond app.
+
+## Local geo tests (optional)
+
+Python 3.10+ in a venv (system `python3` on macOS is often 3.9 and cannot install `spond`).
 
 ```bash
-docker compose logs -f fixture-sync
+python3.14 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt   # or at least: ddgs spond
 ```
 
-Example output:
-```
-Football Fixture Calendar Sync
-========================================
-Fixture URLs: 1 configured
-Calendar ID: abc123@group.cale...
-Poll Schedule: 08:00
-Timezone: Europe/London
-========================================
+| Script | Purpose |
+|---|---|
+| `test_geo_comparison.py` | Compare Nominatim / Google / postcode methods |
+| `test_geo_chosen.py` | Run the production pipeline; prints Maps links for each pin |
+| `test_spond_locations.py` | Preview or `--create` labelled `[TEST GEO]` Spond events (invites only you) |
 
-Running fixture sync at 2024-01-15 08:00:00
-============================================================
-Polling FA Full-Time: https://fulltime.thefa.com/fixtures.html?...
-  Found: 21/01/24 11:00 - Home FC vs Away United
-  Found: 28/01/24 10:30 - Home FC vs Another Team
+`test-data.csv` columns: venue name, true address (scoring only), optional team name.
 
-Total fixtures found: 2
-  Created event: ⚽ Home FC vs Away United on 21/01/24
-  Created event: ⚽ Home FC vs Another Team on 28/01/24
-Sync complete. Added 2 new events.
+```bash
+.venv/bin/python test_geo_chosen.py --google-api-key "$GOOGLE_MAPS_API_KEY"
+.venv/bin/python test_spond_locations.py          # preview
+.venv/bin/python test_spond_locations.py --create # real Spond events
 ```
 
 ## Troubleshooting
 
-### "Service account file not found"
-Ensure `service_account.json` is in the correct location and mounted properly in the container.
+**403 / Cloudflare on FA Full-Time**  
+The list page needs Playwright. Individual fixture *detail* pages are often blocked; the app does not rely on them.
 
-### "Failed to create event: 403"
-The service account doesn't have write access to the calendar. Check that you've shared the calendar with the service account email.
+**Spond location not tappable or in the wrong street**  
+Set `GOOGLE_MAPS_API_KEY` and enable Places API. Check logs for `[Places]` vs postcode fallback.
 
-### "No fixtures table found"
-The FA Full-Time page structure may have changed, or the URL might be incorrect. Verify your fixture URL loads correctly in a browser.
+**Spond 400 / host not in group**  
+Use the member `id` from the group payload, not `clubMembershipId`.
 
-### Fixtures not appearing
-- Check the container logs for errors
-- Verify your fixture URL shows fixtures when viewed in a browser
-- Ensure the calendar ID is correct
+**Calendar duplicates while testing Spond**  
+Leave `CALENDAR_IDS` empty, or set `DRY_RUN=true`.
 
-## Data Persistence
-
-Synced fixture IDs are stored in `data/synced_fixtures.json`. This file tracks which fixtures have already been added to the calendar, preventing duplicates.
-
-If you need to re-sync all fixtures:
-1. Stop the container
-2. Delete `data/synced_fixtures.json`
-3. Restart the container
+**Re-sync everything**  
+Stop the container, delete `data/synced_fixtures.json`, start again. Dry-run does not write this file.
 
 ## License
 

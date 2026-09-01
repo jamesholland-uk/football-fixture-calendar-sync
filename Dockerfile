@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install chromium && playwright install-deps chromium
 
 # Copy the application code
-COPY main.py .
+COPY main.py geocoding.py .
 
 # Run the script
 CMD ["python", "main.py"]
