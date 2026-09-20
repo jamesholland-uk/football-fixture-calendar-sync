@@ -32,7 +32,7 @@ DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
 TZ = os.environ.get("TZ", "Europe/London")
 
 # Team name translations (format: "Full Name:Short Name,Full Name 2:Short Name 2")
-# Example: "Boldmere St Michaels Juniors U11 2015 JH:Mikes,Other Team U12:Owls"
+# Example: "Example FC U12:Owls,Other Team U11:Tigers"
 TEAM_NAMES_RAW = os.environ.get("TEAM_NAMES", "")
 
 

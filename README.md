@@ -128,7 +128,7 @@ pip install -r requirements.txt   # or at least: ddgs spond
 | `test_geo_chosen.py` | Run the production pipeline; prints Maps links for each pin |
 | `test_spond_locations.py` | Preview or `--create` labelled `[TEST GEO]` Spond **matches** (HOME/AWAY, kit colours, invites only you) |
 
-`test-data.csv` columns: venue name, true address (scoring only), optional team name.
+Copy `test-data.csv.example` to `test-data.csv` (gitignored; keep your real venues local). Columns: venue name, true address (scoring only), optional team name.
 
 ```bash
 .venv/bin/python test_geo_chosen.py --google-api-key "$GOOGLE_MAPS_API_KEY"

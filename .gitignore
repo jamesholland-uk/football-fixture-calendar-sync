@@ -223,3 +223,4 @@ __marimo__/
 # Project-specific
 service_account.json
 data/
+test-data.csv
