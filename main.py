@@ -780,14 +780,16 @@ def validate_config() -> bool:
     if not FIXTURE_URLS or FIXTURE_URLS == [""]:
         errors.append("FIXTURE_URLS environment variable is not set")
 
-    url_count = len([u for u in FIXTURE_URLS if u.strip()])
-    
-    # Check calendar configuration (optional)
+    # Check calendar configuration (optional).
+    # Slots line up with FIXTURE_URLS. A blank slot skips Calendar for that URL.
     has_calendar = any(c.strip() for c in CALENDAR_IDS)
     if has_calendar:
-        cal_count = len([c for c in CALENDAR_IDS if c.strip()])
-        if url_count != cal_count:
-            errors.append(f"Mismatch: {url_count} fixture URLs but {cal_count} calendar IDs (must be equal)")
+        if len(FIXTURE_URLS) != len(CALENDAR_IDS):
+            errors.append(
+                f"Mismatch: {len(FIXTURE_URLS)} fixture URL slots but {len(CALENDAR_IDS)} calendar slots. "
+                "Use one entry per URL in the same order; a blank entry skips Calendar for that URL "
+                "(for example CALENDAR_IDS=,second@group.calendar.google.com)."
+            )
         if not Path(SERVICE_ACCOUNT_FILE).exists():
             errors.append(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
     else:

@@ -73,7 +73,7 @@ Dockge: new stack from `compose.yaml`, put `service_account.json` and `.env` on 
 | Variable | Description | Default |
 |---|---|---|
 | `FIXTURE_URLS` | Comma-separated FA Full-Time fixture URLs | required |
-| `CALENDAR_IDS` | Calendar IDs, one per URL, same order. Empty = no Calendar sync | off |
+| `CALENDAR_IDS` | Calendar IDs, one slot per URL, same order. A blank slot skips that URL. Empty value = no Calendar sync | off |
 | `SERVICE_ACCOUNT_FILE` | Path to service account JSON in the container | `/app/service_account.json` |
 | `POLL_INTERVAL_HOURS` | How often to poll | `12` |
 | `TZ` | Timezone for local kick-off times | `Europe/London` |
