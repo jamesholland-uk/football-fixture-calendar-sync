@@ -7,8 +7,8 @@ There is no official FA API. The container uses a headless browser to load the f
 ## Features
 
 - Scrapes FA Full-Time fixture lists (Playwright, to get past Cloudflare)
-- Optional Google Calendar sync (one calendar per fixture URL)
-- Optional Spond match events (one group per fixture URL), with clickable map pins
+- Optional Google Calendar sync (one calendar per team)
+- Optional Spond match events (one group per team), with clickable map pins
 - Updates existing calendar events when kick-off, opponent, or venue changes
 - Email notifications for newly found fixtures
 - Email alerts on poll/sync failure (and a recovery mail when it works again)
@@ -46,7 +46,7 @@ Do not bake `service_account.json` into the image. Bind-mount it (see `compose.y
 
 1. Use the Spond account that can create events in the group
 2. Group ID is the last segment of the group URL, e.g. `https://spond.com/landing/group/ABCD1234` → `ABCD1234`
-3. Optional host IDs: the member `id` of the coach/manager who should own the event (from Spond network requests, not `clubMembershipId`)
+3. Optional host IDs: member `id`s of the coach/manager(s) who should own the event (from Spond network requests, not `clubMembershipId`). Multiple hosts on one team: join with `|`.
 
 ### 4. Maps key (for Spond pins)
 
@@ -73,7 +73,7 @@ Dockge: new stack from `compose.yaml`, put `service_account.json` and `.env` on 
 | Variable | Description | Default |
 |---|---|---|
 | `FIXTURE_URLS` | Comma-separated FA Full-Time fixture URLs | required |
-| `CALENDAR_IDS` | Calendar IDs, one slot per URL, same order. A blank slot skips that URL. Empty value = no Calendar sync | off |
+| `CALENDAR_IDS` | Calendar IDs, one slot per team, same order as `FIXTURE_URLS`. A blank slot skips that team. Empty value = no Calendar sync | off |
 | `SERVICE_ACCOUNT_FILE` | Path to service account JSON in the container | `/app/service_account.json` |
 | `POLL_INTERVAL_HOURS` | How often to poll | `12` |
 | `TZ` | Timezone for local kick-off times | `Europe/London` |
@@ -84,8 +84,8 @@ Dockge: new stack from `compose.yaml`, put `service_account.json` and `.env` on 
 | `EMAIL_TO_ADMIN` | Recipients for poll/sync failure and recovery alerts | off |
 | `HEALTHCHECKS_PING_URL` | Ping URL (e.g. Healthchecks.io) after every poll. This is what catches a dead container | off |
 | `SPOND_EMAIL` / `SPOND_PASSWORD` | Spond login | off if blank |
-| `SPOND_GROUP_IDS` | Group IDs, one per URL, same order | off |
-| `SPOND_HOST_IDS` | Event owner member IDs, one per URL | your Spond user |
+| `SPOND_GROUP_IDS` | Group IDs, one per team, same order as `FIXTURE_URLS` | off |
+| `SPOND_HOST_IDS` | Event owner member IDs. Comma between teams; `id1\|id2` for multiple hosts on one team | your Spond user |
 | `GOOGLE_MAPS_API_KEY` | Geocoding + Places for Spond locations | postcode fallback |
 | `DRY_RUN` | `true` = no Calendar/Spond writes and no `synced_fixtures.json` update | `false` |
 | `DATA_DIR` | Persistence directory | `/app/data` |
@@ -127,6 +127,7 @@ pip install -r requirements.txt   # or at least: ddgs spond
 | `test_geo_comparison.py` | Compare Nominatim / Google / postcode methods |
 | `test_geo_chosen.py` | Run the production pipeline; prints Maps links for each pin |
 | `test_spond_locations.py` | Preview or `--create` labelled `[TEST GEO]` Spond **matches** (HOME/AWAY, kit colours, invites only you) |
+| `test_spond_hosts.py` | Unit tests for `SPOND_HOST_IDS` (`id1\|id2` per team) |
 
 Copy `test-data.csv.example` to `test-data.csv` (gitignored; keep your real venues local). Columns: venue name, true address (scoring only), optional team name.
 
@@ -134,6 +135,7 @@ Copy `test-data.csv.example` to `test-data.csv` (gitignored; keep your real venu
 .venv/bin/python test_geo_chosen.py --google-api-key "$GOOGLE_MAPS_API_KEY"
 .venv/bin/python test_spond_locations.py          # preview
 .venv/bin/python test_spond_locations.py --create # real Spond matches
+python3 test_spond_hosts.py                       # no extra deps
 ```
 
 ## Troubleshooting

@@ -6,7 +6,7 @@ services:
     environment:
       # Comma-separated list of FA Full-Time fixture URLs to poll
       - FIXTURE_URLS=${FIXTURE_URLS}
-      # Comma-separated list of Google Calendar IDs (one per fixture URL, in same order)
+      # Comma-separated list of Google Calendar IDs (one per team, same order as FIXTURE_URLS)
       - CALENDAR_IDS=${CALENDAR_IDS:-}
       # Path to service account credentials (inside container)
       - SERVICE_ACCOUNT_FILE=/app/service_account.json

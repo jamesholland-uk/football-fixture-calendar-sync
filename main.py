@@ -21,6 +21,7 @@ from googleapiclient.errors import HttpError
 from spond import spond
 
 from geocoding import geocode_venue
+from spond_hosts import parse_spond_host_slots
 from team_colours import kit_colour_for_fixture, load_team_colours
 
 # Configuration from environment variables
@@ -48,8 +49,8 @@ EMAIL_TO_ADMIN = os.environ.get("EMAIL_TO_ADMIN", "")  # Failure/recovery alerts
 # Spond integration (optional)
 SPOND_EMAIL = os.environ.get("SPOND_EMAIL", "")
 SPOND_PASSWORD = os.environ.get("SPOND_PASSWORD", "")
-SPOND_GROUP_IDS = os.environ.get("SPOND_GROUP_IDS", "").split(",")  # One per fixture URL
-SPOND_HOST_IDS = os.environ.get("SPOND_HOST_IDS", "").split(",")  # One per fixture URL (optional)
+SPOND_GROUP_IDS = os.environ.get("SPOND_GROUP_IDS", "").split(",")  # One per team
+SPOND_HOST_SLOTS = parse_spond_host_slots(os.environ.get("SPOND_HOST_IDS", ""))
 
 # Dry run mode - test without creating events
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("true", "1", "yes")
@@ -151,7 +152,7 @@ def send_email_notification(fixture: dict) -> bool:
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
-async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") -> bool:
+async def create_spond_event(fixture: dict, group_id: str, host_ids: list[str] | None = None) -> bool:
     """Create a Spond event for a fixture."""
     if not all([SPOND_EMAIL, SPOND_PASSWORD, group_id]):
         return False  # Spond not configured
@@ -277,9 +278,9 @@ async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") ->
         if kit_colour:
             event_data["matchInfo"]["teamColour"] = kit_colour
         
-        # Set event host/owner if specified
-        if host_id:
-            event_data["owners"] = [{"id": host_id}]
+        # Set event hosts/owners if specified (Spond accepts multiple)
+        if host_ids:
+            event_data["owners"] = [{"id": host_id} for host_id in host_ids]
         
         # Dry run mode - skip actual creation
         if DRY_RUN:
@@ -287,6 +288,8 @@ async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") ->
             print(f"  [DRY RUN] Location: {location}")
             if kit_colour:
                 print(f"  [DRY RUN] teamColour: {kit_colour} ({match_type})")
+            if host_ids:
+                print(f"  [DRY RUN] owners: {', '.join(host_ids)}")
             await s.clientsession.close()
             return True
         
@@ -311,11 +314,11 @@ async def create_spond_event(fixture: dict, group_id: str, host_id: str = "") ->
         return False
 
 
-def create_spond_event_sync(fixture: dict, group_id: str, host_id: str = "") -> bool:
+def create_spond_event_sync(fixture: dict, group_id: str, host_ids: list[str] | None = None) -> bool:
     """Synchronous wrapper for create_spond_event."""
     if not all([SPOND_EMAIL, SPOND_PASSWORD, group_id]):
         return False
-    return asyncio.run(create_spond_event(fixture, group_id, host_id))
+    return asyncio.run(create_spond_event(fixture, group_id, host_ids))
 
 
 def get_fixture_date_key(fixture: dict, url_index: int) -> str:
@@ -695,10 +698,10 @@ def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> list[str]:
             if url_index < len(SPOND_GROUP_IDS):
                 spond_group_id = SPOND_GROUP_IDS[url_index].strip()
                 if spond_group_id:
-                    spond_host_id = ""
-                    if url_index < len(SPOND_HOST_IDS):
-                        spond_host_id = SPOND_HOST_IDS[url_index].strip()
-                    if not create_spond_event_sync(fixture, spond_group_id, spond_host_id):
+                    spond_host_ids: list[str] = []
+                    if url_index < len(SPOND_HOST_SLOTS):
+                        spond_host_ids = SPOND_HOST_SLOTS[url_index]
+                    if not create_spond_event_sync(fixture, spond_group_id, spond_host_ids):
                         errors.append(f"Spond create failed: {label}")
 
     if not DRY_RUN:

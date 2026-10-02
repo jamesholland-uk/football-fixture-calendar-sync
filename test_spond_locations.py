@@ -27,6 +27,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from geocoding import geocode_chosen, to_spond_location
+from spond_hosts import parse_spond_host_slots
 from team_colours import kit_colour_for_fixture, load_team_colours
 
 
@@ -93,7 +94,8 @@ async def create_test_events(do_create: bool) -> None:
     email = os.environ.get("SPOND_EMAIL", "")
     password = os.environ.get("SPOND_PASSWORD", "")
     group_ids = [g.strip() for g in os.environ.get("SPOND_GROUP_IDS", "").split(",") if g.strip()]
-    host_ids = [h.strip() for h in os.environ.get("SPOND_HOST_IDS", "").split(",") if h.strip()]
+    host_slots = parse_spond_host_slots(os.environ.get("SPOND_HOST_IDS", ""))
+    host_ids = host_slots[0] if host_slots else []
     tz_name = os.environ.get("TZ", "Europe/London")
 
     if not email or not password or not group_ids:
@@ -101,11 +103,12 @@ async def create_test_events(do_create: bool) -> None:
         sys.exit(1)
 
     group_id = group_ids[0]
-    host_id = host_ids[0] if host_ids else ""
+    host_id = host_ids[0] if host_ids else ""  # invitee fallback; all host_ids become owners
     venues = load_test_venues()
     our_team = next(iter(team_colours), "")
     print(f"Venues: {len(venues)}")
     print(f"Spond group: {group_id}")
+    print(f"Spond hosts: {', '.join(host_ids) if host_ids else '(logged-in account)'}")
     if our_team:
         home_c = team_colours[our_team]["home"]
         away_c = team_colours[our_team]["away"]
@@ -219,8 +222,8 @@ async def create_test_events(do_create: bool) -> None:
                     "group": {"id": group_id, "members": [{"id": invitee_id}]},
                 },
             }
-            if host_id:
-                event_data["owners"] = [{"id": host_id}]
+            if host_ids:
+                event_data["owners"] = [{"id": h} for h in host_ids]
 
             url = f"{s.api_url}sponds/"
             async with s.clientsession.post(url, json=event_data, headers=s.auth_headers) as r:
