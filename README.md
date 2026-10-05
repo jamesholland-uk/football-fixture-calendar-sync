@@ -68,6 +68,18 @@ docker compose logs -f
 
 Dockge: new stack from `compose.yaml`, put `service_account.json` and `.env` on the host, deploy.
 
+After the first run, `.env` changes are picked up by recreating the container. A rebuild is only needed when application code, `requirements.txt`, or the `Dockerfile` changes.
+
+```bash
+# .env only
+docker compose up -d
+
+# code or image changes
+docker compose up -d --build
+```
+
+`docker compose restart` keeps the environment from when the container was created, so it will not apply a new `.env`. In Dockge, redeploy the stack after editing `.env`.
+
 ## Configuration
 
 | Variable | Description | Default |
