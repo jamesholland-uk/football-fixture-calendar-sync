@@ -46,6 +46,16 @@ def postcode_district(postcode: str) -> str:
     return match.group(1) if match else cleaned[:3]
 
 
+def fixture_venue_name(raw: str) -> str:
+    """Venue name from the FA list text: drop the " - 09:30AM" suffix and stray spaces.
+
+    FA writes e.g. "SOME GROUND BSM1A  - 09:30AM" (two spaces before the dash), so a plain
+    split leaves a trailing space. Pitch codes such as BSM1A are kept: they tell parents
+    which pitch, and are only removed from the *search* name by clean_venue_name.
+    """
+    return raw.split(" - ")[0].strip()
+
+
 def clean_venue_name(venue_name: str) -> str:
     name = venue_name.upper()
     name = re.sub(r"\s*3G\s*", " ", name)

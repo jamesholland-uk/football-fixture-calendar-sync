@@ -20,7 +20,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from spond import spond
 
-from geocoding import geocode_venue
+from geocoding import fixture_venue_name, geocode_venue
 from spond_hosts import parse_spond_host_slots
 from venue_addresses import find_venue_address, parse_venue_addresses
 from venue_review import (
@@ -276,10 +276,8 @@ async def create_spond_event(fixture: dict, group_id: str, host_ids: list[str] |
         location = {}
         venue_raw = fixture.get("venue", "")
         if venue_raw:
-            venue = venue_raw
             # Remove time suffix if present (e.g., "VENUE NAME - 11:00AM" -> "VENUE NAME")
-            if " - " in venue:
-                venue = venue.split(" - ")[0]
+            venue = fixture_venue_name(venue_raw)
             
             # For away games, pass opponent team as geocoding hint
             opponent_hint = ""
@@ -703,10 +701,7 @@ def build_calendar_event(fixture: dict) -> dict | None:
     # Add venue as location if available
     if fixture.get("venue"):
         # Extract just the venue name (remove time suffix if present)
-        venue = fixture["venue"]
-        if " - " in venue:
-            venue = venue.split(" - ")[0]
-        event["location"] = venue
+        event["location"] = fixture_venue_name(fixture["venue"])
 
     return event
 
