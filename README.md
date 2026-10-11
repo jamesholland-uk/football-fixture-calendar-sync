@@ -170,7 +170,17 @@ Use the member `id` from the group payload, not `clubMembershipId`.
 Leave `CALENDAR_IDS` empty, or set `DRY_RUN=true` (a dry run writes nothing to Calendar or Spond).
 
 **Re-sync everything**  
-Stop the container, delete `data/synced_fixtures.json`, start again. Dry-run does not write this file, so with `DRY_RUN=true` you can delete it to rehearse every fixture as new: you will see the geocoding, the Calendar/Spond events and the emails that *would* be created, and nothing is sent. Set `DRY_RUN=false` only when you want them for real.
+Stop the container, delete `data/synced_fixtures.json`, start again. Every fixture is then treated as new, so with `DRY_RUN=false` this creates Calendar and Spond events again (duplicates of any that exist).
+
+**Rehearse every fixture as new (dry run) without creating duplicates**  
+Dry-run never writes `synced_fixtures.json`, so *rename* it, never delete it. If it is missing when you go live, every fixture is created a second time.
+```
+mv data/synced_fixtures.json data/synced_fixtures.json.bak   # with DRY_RUN=true
+docker compose up -d --force-recreate && docker compose logs -f
+# read the geocoding, Calendar/Spond events and emails that WOULD happen, then:
+mv data/synced_fixtures.json.bak data/synced_fixtures.json   # restore BEFORE going live
+```
+Restore the file *before* setting `DRY_RUN=false`. Never go live while it is renamed.
 
 ## Alerting
 
