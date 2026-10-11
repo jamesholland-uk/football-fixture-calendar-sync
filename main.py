@@ -110,6 +110,10 @@ def send_email(subject: str, body: str, to: str) -> bool:
     recipients = [email.strip() for email in to.split(",") if email.strip()]
     if not smtp_configured() or not recipients:
         return False
+    if DRY_RUN:
+        # Success, so callers do not treat a dry run as a failure
+        print(f"  [DRY RUN] Would email {', '.join(recipients)}: {subject}")
+        return True
     try:
         to_header = ", ".join(recipients)
         msg = MIMEMultipart()
@@ -713,6 +717,10 @@ def create_calendar_event(service, calendar_id: str, fixture: dict) -> str | Non
     if not event:
         return None
 
+    if DRY_RUN:
+        print(f"  [DRY RUN] Would create Calendar event: {event['summary']} on {fixture['date']}")
+        return "dry-run-event-id"  # truthy so the sync does not report a failure
+
     try:
         created_event = service.events().insert(calendarId=calendar_id, body=event).execute()
         print(f"  Created event: {event['summary']} on {fixture['date']}")
@@ -727,6 +735,10 @@ def update_calendar_event(service, calendar_id: str, event_id: str, fixture: dic
     event = build_calendar_event(fixture)
     if not event:
         return False
+
+    if DRY_RUN:
+        print(f"  [DRY RUN] Would update Calendar event: {event['summary']} on {fixture['date']}")
+        return True
 
     try:
         service.events().update(calendarId=calendar_id, eventId=event_id, body=event).execute()

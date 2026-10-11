@@ -15,7 +15,7 @@ There is no official FA API. The container uses a headless browser to load the f
 - Optional Healthchecks.io ping so you are emailed if the container stops
 - Short team names in event titles (`TEAM_NAMES`)
 - Home/away kit colours on Spond match events (`TEAM_COLOURS`)
-- Dry-run mode (geocode and log, do not create events or write state)
+- Full dry-run mode (geocode and log; no Calendar/Spond writes, no emails, no state saved)
 - Docker / Dockge deployment; credentials stay on the host via bind mount
 
 ## What you need
@@ -100,7 +100,7 @@ docker compose up -d --build
 | `SPOND_HOST_IDS` | Event owner member IDs. Comma between teams; `id1\|id2` for multiple hosts on one team | your Spond user |
 | `GOOGLE_MAPS_API_KEY` | Geocoding + Places for Spond locations | postcode fallback |
 | `VENUE_ADDRESSES` | `VENUE NAME=full FA address;Other=address` pins a venue to its address (postcode required) so the Spond pin is never guessed from a short name. Semicolon between venues; case and `3G`/`Pitch` suffixes ignored | guessed |
-| `DRY_RUN` | `true` = no Calendar/Spond writes and no `synced_fixtures.json` update | `false` |
+| `DRY_RUN` | `true` = full dry run: no Calendar or Spond writes, no emails of any kind (fixture, venue-check or failure alerts; they are logged as `[DRY RUN] Would email …`), no `synced_fixtures.json` or `reviewed_venues.json` update. Still happens: reading FA, geocoding, a read-only Spond login, the Healthchecks ping and `data/last_run` | `false` |
 | `DATA_DIR` | Persistence directory | `/app/data` |
 
 You must configure Calendar and/or Spond. Either output can be omitted.
@@ -167,10 +167,10 @@ With `DRY_RUN=true` the log prints each row's raw venue-cell HTML, and makes one
 Use the member `id` from the group payload, not `clubMembershipId`.
 
 **Calendar duplicates while testing Spond**  
-Leave `CALENDAR_IDS` empty, or set `DRY_RUN=true`.
+Leave `CALENDAR_IDS` empty, or set `DRY_RUN=true` (a dry run writes nothing to Calendar or Spond).
 
 **Re-sync everything**  
-Stop the container, delete `data/synced_fixtures.json`, start again. Dry-run does not write this file.
+Stop the container, delete `data/synced_fixtures.json`, start again. Dry-run does not write this file, so with `DRY_RUN=true` you can delete it to rehearse every fixture as new: you will see the geocoding, the Calendar/Spond events and the emails that *would* be created, and nothing is sent. Set `DRY_RUN=false` only when you want them for real.
 
 ## Alerting
 
