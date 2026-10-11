@@ -163,6 +163,70 @@ class ClassifyDetailPageTest(unittest.TestCase):
         self.assertEqual(kind, "address")
         self.assertIn("B92 9EJ", snippet)
 
+    def test_cloudflare_block_page_attention_required_is_a_challenge(self) -> None:
+        # Seen in production: the probe saved this page and reported it as OK.
+        from venue_review import classify_detail_page
+
+        html = (
+            "<html><head><title>Attention Required! | Cloudflare</title></head><body>"
+            "<h1>Sorry, you have been prevented from accessing this page.</h1>"
+            "<p>Cloudflare Ray ID: abc123</p></body></html>"
+        )
+        self.assertEqual(classify_detail_page("Attention Required! | Cloudflare", html), ("challenge", None))
+
+    def test_cloudflare_block_page_recognised_by_body_when_title_missing(self) -> None:
+        from venue_review import classify_detail_page
+
+        html = "<h1>Sorry, you have been prevented from accessing this page.</h1>"
+        self.assertEqual(classify_detail_page("", html), ("challenge", None))
+        self.assertEqual(
+            classify_detail_page("", "<p>Cloudflare Ray ID: a48e3cce3996b3b3</p>"),
+            ("challenge", None),
+        )
+
+    def test_page_with_an_address_is_not_mistaken_for_a_block(self) -> None:
+        from venue_review import classify_detail_page
+
+        kind, _ = classify_detail_page("Fixture", "<td>DAMSON PARK, SOLIHULL, B92 9EJ</td>")
+        self.assertEqual(kind, "address")
+
+    def test_postcode_shaped_text_inside_embedded_font_data_is_not_an_address(self) -> None:
+        # Seen in production: the detail page embeds a base64 web font. A postcode-shaped
+        # run inside it ("AB1C2DE", "A1B2CD") is not an address.
+        from venue_review import classify_detail_page
+
+        blob = "dJjdnQgEiET6gAAs/QAAAAuZnBnbQ+0L6cAALQkAAACZWdhc3AAAAAQAAC2jAAAAAhnbHlmwb" "B92" "9EJ" "emDwAAtpQAAIccaGVhZP4CKPAAAT2wAAAANm" "AB1C2DE" "hoZWE"
+        html = (
+            "<html><head><style>@font-face{src:url(data:font/woff2;base64,"
+            + blob
+            + ")}</style></head><body><p>No address</p></body></html>"
+        )
+        self.assertEqual(classify_detail_page("Fixture", html), ("unknown", None))
+
+    def test_postcode_inside_script_or_attribute_is_ignored(self) -> None:
+        from venue_review import classify_detail_page
+
+        html = (
+            '<script>var x="B92 9EJ";</script>'
+            '<img src="data:image/png;base64,iVBORAB1 2CDxx"><body>nothing</body>'
+        )
+        self.assertEqual(classify_detail_page("Fixture", html), ("unknown", None))
+
+    def test_snippet_is_visible_text_not_markup(self) -> None:
+        from venue_review import classify_detail_page
+
+        html = '<div class="venue"><span>Venue:</span> <b>DAMSON PARK, SOLIHULL, B92 9EJ</b></div>'
+        kind, snippet = classify_detail_page("Fixture", html)
+        self.assertEqual(kind, "address")
+        self.assertNotIn("<", snippet)
+        self.assertIn("DAMSON PARK, SOLIHULL, B92 9EJ", snippet)
+
+    def test_embedded_postcode_inside_a_longer_word_is_not_matched(self) -> None:
+        from venue_review import classify_detail_page
+
+        kind, _ = classify_detail_page("Fixture", "<p>xxB92 9EJyy</p>")
+        self.assertEqual(kind, "unknown")
+
     def test_real_page_without_postcode_is_unknown(self) -> None:
         from venue_review import classify_detail_page
 

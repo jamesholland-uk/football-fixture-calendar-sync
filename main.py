@@ -430,7 +430,7 @@ def probe_detail_page(context, fixtures: list[dict]) -> None:
         html = page.content()
         kind, snippet = classify_detail_page(page.title(), html)
         if kind == "challenge":
-            print("  [DRY RUN] Detail probe: BLOCKED by Cloudflare challenge. Not retrying.")
+            print("  [DRY RUN] Detail probe: BLOCKED by Cloudflare (challenge or block page). Not retrying.")
         elif kind == "address":
             out = Path(DATA_DIR) / "detail_probe.html"
             Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
