@@ -10,9 +10,7 @@ JSON file in the data directory.
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timezone
-from html import unescape
 from pathlib import Path
 
 from geocoding import clean_venue_name
@@ -120,54 +118,3 @@ def build_venue_review_email(
         "You will not be emailed about this venue again.",
     ]
     return subject, "\n".join(lines)
-
-
-_POSTCODE_RE = re.compile(
-    r"(?<![A-Z0-9])([A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2})(?![A-Z0-9])"
-)
-
-
-def visible_text(html: str) -> str:
-    """Page text a person would read: no scripts, styles, comments, tags or attributes.
-
-    Raw HTML is not searched: pages embed base64 fonts/images whose letters and digits
-    can look like a postcode.
-    """
-    html = re.sub(r"(?is)<(script|style|noscript|svg)\b.*?</\1\s*>", " ", html)
-    html = re.sub(r"(?s)<!--.*?-->", " ", html)
-    html = re.sub(r"(?s)<[^>]*>", " ", html)
-    return " ".join(unescape(html).split())
-
-
-_BLOCK_TITLES = ("just a moment", "attention required")
-_BLOCK_MARKERS = (
-    "challenge-platform",  # JS challenge ("Just a moment...")
-    "prevented from accessing this page",  # hard block ("Attention Required!")
-    "cloudflare ray id",  # footer on both
-)
-
-
-def _is_cloudflare_block(title: str, html: str) -> bool:
-    """Cloudflare serves at least two different interstitials; recognise both."""
-    lowered_title = title.lower()
-    if any(t in lowered_title for t in _BLOCK_TITLES):
-        return True
-    lowered = html.lower()
-    return any(m in lowered for m in _BLOCK_MARKERS)
-
-
-def classify_detail_page(title: str, html: str) -> tuple[str, str | None]:
-    """Classify an FA fixture detail page fetched by the dry-run probe.
-
-    Returns ("challenge", None) if Cloudflare's bot check is showing (the probe then
-    stops; it never tries to get past it), ("address", snippet) if a postcode appears in
-    the visible text, else ("unknown", None).
-    """
-    if _is_cloudflare_block(title, html):
-        return "challenge", None
-    text = visible_text(html)
-    match = _POSTCODE_RE.search(text.upper())
-    if not match:
-        return "unknown", None
-    start = max(0, match.start() - 120)
-    return "address", text[start : match.end()]

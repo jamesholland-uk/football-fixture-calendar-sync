@@ -25,7 +25,6 @@ from spond_hosts import parse_spond_host_slots
 from venue_addresses import find_venue_address, parse_venue_addresses
 from venue_review import (
     build_venue_review_email,
-    classify_detail_page,
     load_reviewed_venues,
     mark_venue_reviewed,
     venue_review_key,
@@ -417,35 +416,6 @@ def save_synced_fixtures(synced: dict) -> None:
         json.dump(synced, f, indent=2)
 
 
-def probe_detail_page(context, fixtures: list[dict]) -> None:
-    """Dry-run diagnostic: one plain visit to one detail page. Never retries or works
-    around a challenge; it only reports what happened."""
-    target = next((f for f in fixtures if f.get("detail_url")), None)
-    if not target:
-        print("  [DRY RUN] Detail probe: no detail URL found on the list page")
-        return
-    url = target["detail_url"]
-    print(f"  [DRY RUN] Detail probe (single attempt): {url}")
-    try:
-        page = context.new_page()
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        html = page.content()
-        kind, snippet = classify_detail_page(page.title(), html)
-        if kind == "challenge":
-            print("  [DRY RUN] Detail probe: BLOCKED by Cloudflare (challenge or block page). Not retrying.")
-        elif kind == "address":
-            out = Path(DATA_DIR) / "detail_probe.html"
-            Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-            out.write_text(html, encoding="utf-8")
-            print(f"  [DRY RUN] Detail probe: OK, address text found: ...{snippet}")
-            print(f"  [DRY RUN] Detail probe: page saved to {out}")
-        else:
-            print("  [DRY RUN] Detail probe: page loaded but no postcode found in it")
-        page.close()
-    except Exception as e:
-        print(f"  [DRY RUN] Detail probe failed: {e}")
-
-
 def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
     """Fetch fixtures from an FA Full-Time fixtures page.
 
@@ -535,7 +505,6 @@ def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
 
                     # Find venue - it's the cell after road-team
                     venue = ""
-                    venue_cell_html = ""
                     competition = ""
                     
                     all_cells = row.find_all("td")
@@ -553,7 +522,6 @@ def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
                             text = cell.get_text(strip=True)
                             if text:
                                 venue = text
-                                venue_cell_html = str(cell)
                                 venue_found = True
                             continue
                         
@@ -575,20 +543,13 @@ def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
                     }
                     fixtures.append(fixture)
                     print(f"  Found: {date_str} {time_str} - {home_team} vs {away_team}")
-                    if DRY_RUN:
-                        # Does the list page carry more than the short venue name?
-                        print(f"    [DRY RUN] venue cell HTML: {venue_cell_html}")
 
                 except Exception as e:
                     print(f"  Error parsing row: {e}")
                     continue
 
-            # Detail pages are not used for syncing (Cloudflare usually blocks them).
-            # Use VENUE_ADDRESSES for pinned addresses. In dry run only, make a single
-            # plain attempt in this same browser session to see whether that has changed.
-            if DRY_RUN:
-                probe_detail_page(context, fixtures)
-            
+            # Detail pages are not used (Cloudflare blocks them, confirmed from the
+            # server). The list page has no address, so use VENUE_ADDRESSES to pin venues.
             browser.close()
             return fixtures, None
 

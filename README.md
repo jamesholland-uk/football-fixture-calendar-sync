@@ -160,9 +160,6 @@ The list page needs Playwright. Individual fixture *detail* pages are often bloc
 Set `GOOGLE_MAPS_API_KEY` and enable Places API. Check logs for `[Places]` vs postcode fallback.  
 If a short FA venue name resolves to the wrong place (e.g. the right road, wrong end), pin it with `VENUE_ADDRESSES` using the full address from the FA fixture page. The log shows `Using pinned VENUE_ADDRESSES entry`.
 
-**Does the FA list page carry the full address?**  
-With `DRY_RUN=true` the log prints each row's raw venue-cell HTML, and makes one plain attempt at one fixture detail page in the same browser session. It reports `BLOCKED by Cloudflare challenge` (and does not retry) or, if the page loads, saves it to `data/detail_probe.html`. It never tries to bypass the challenge.
-
 **Spond 400 / host not in group**  
 Use the member `id` from the group payload, not `clubMembershipId`.
 
