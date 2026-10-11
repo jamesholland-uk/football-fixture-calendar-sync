@@ -94,7 +94,7 @@ def build_venue_review_email(
         "",
         "If the FA address has no postcode, find the venue on Google Maps (search its name",
         "and town), then add the postcode to the end of the address, e.g.",
-        "  ...DAMSON PARKWAY, SOLIHULL, B92 9EJ",
+        "  ...EXAMPLE PARKWAY, EXAMPLETON, EX1 1AA",
         "A postcode is required: without a postcode the pin is ignored and the app goes",
         "back to guessing from the short name. Check the Maps result is the actual ground,",
         "not a road or a similarly named place nearby.",

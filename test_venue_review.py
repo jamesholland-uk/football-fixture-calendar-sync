@@ -18,27 +18,27 @@ FIXTURE = {
     "time": "09:30",
     "home_team": "Home FC U10",
     "away_team": "Away FC U10",
-    "venue": "DAMSON PARK 3G Pitch 1D - 09:30AM",
+    "venue": "EXAMPLE PARK 3G Pitch 1D - 09:30AM",
     "detail_url": "https://fulltime.thefa.com/displayFixture.html?id=1",
 }
 GEOCODED = {
-    "latitude": 52.421303,
-    "longitude": -1.7611479,
-    "addressLine": "3 Damson Pkwy, Solihull B91 2PP, UK",
-    "postalCode": "B91 2PP",
-    "feature": "DAMSON PARK 3G Pitch 1D",
+    "latitude": 50.0900,
+    "longitude": -1.0900,
+    "addressLine": "3 Example Pkwy, Exampleton EX2 2BB, UK",
+    "postalCode": "EX2 2BB",
+    "feature": "EXAMPLE PARK 3G Pitch 1D",
 }
 
 
 class ReviewKeyTest(unittest.TestCase):
     def test_pitch_suffixes_share_one_key(self) -> None:
         self.assertEqual(
-            venue_review_key("DAMSON PARK 3G Pitch 1D"),
-            venue_review_key("damson park pitch 2"),
+            venue_review_key("EXAMPLE PARK 3G Pitch 1D"),
+            venue_review_key("example park pitch 2"),
         )
 
     def test_different_venues_differ(self) -> None:
-        self.assertNotEqual(venue_review_key("DAMSON PARK"), venue_review_key("OTHER PARK"))
+        self.assertNotEqual(venue_review_key("EXAMPLE PARK"), venue_review_key("OTHER PARK"))
 
 
 class ReviewedStoreTest(unittest.TestCase):
@@ -55,53 +55,53 @@ class ReviewedStoreTest(unittest.TestCase):
     def test_mark_then_load_round_trips_and_creates_dir(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "sub" / "r.json"
-            mark_venue_reviewed(p, "DAMSON PARK", "3 Damson Pkwy, B91 2PP")
+            mark_venue_reviewed(p, "EXAMPLE PARK", "3 Example Pkwy, EX2 2BB")
             mark_venue_reviewed(p, "OTHER", "x")
             data = load_reviewed_venues(p)
-            self.assertEqual(set(data), {"DAMSON PARK", "OTHER"})
-            self.assertEqual(data["DAMSON PARK"]["resolved"], "3 Damson Pkwy, B91 2PP")
+            self.assertEqual(set(data), {"EXAMPLE PARK", "OTHER"})
+            self.assertEqual(data["EXAMPLE PARK"]["resolved"], "3 Example Pkwy, EX2 2BB")
             json.loads(p.read_text(encoding="utf-8"))  # valid JSON on disk
 
 
 class ReviewEmailTest(unittest.TestCase):
     def test_resolved_venue_email_has_what_admin_needs(self) -> None:
         subject, body = build_venue_review_email(
-            "DAMSON PARK 3G Pitch 1D", FIXTURE, GEOCODED, geocoded=True
+            "EXAMPLE PARK 3G Pitch 1D", FIXTURE, GEOCODED, geocoded=True
         )
-        self.assertIn("DAMSON PARK", subject)
-        self.assertIn("3 Damson Pkwy, Solihull B91 2PP, UK", body)
-        self.assertIn("https://www.google.com/maps?q=52.421303,-1.7611479", body)
+        self.assertIn("EXAMPLE PARK", subject)
+        self.assertIn("3 Example Pkwy, Exampleton EX2 2BB, UK", body)
+        self.assertIn("https://www.google.com/maps?q=50.09,-1.09", body)
         self.assertIn(FIXTURE["detail_url"], body)  # where to read the real address
-        self.assertIn("VENUE_ADDRESSES=DAMSON PARK=", body)  # cleaned name, ready to paste
+        self.assertIn("VENUE_ADDRESSES=EXAMPLE PARK=", body)  # cleaned name, ready to paste
         self.assertIn("11/10/26", body)
 
     def test_line_merges_existing_pins_so_it_is_one_paste(self) -> None:
         existing = {"OTHER GROUND": "1 HIGH ST, TOWN, AB1 2CD"}
         _, body = build_venue_review_email(
-            "DAMSON PARK 3G Pitch 1D", FIXTURE, GEOCODED, geocoded=True, existing=existing
+            "EXAMPLE PARK 3G Pitch 1D", FIXTURE, GEOCODED, geocoded=True, existing=existing
         )
         self.assertIn(
             "VENUE_ADDRESSES=OTHER GROUND=1 HIGH ST, TOWN, AB1 2CD;"
-            "DAMSON PARK=<paste the address from the FA fixture page>",
+            "EXAMPLE PARK=<paste the address from the FA fixture page>",
             body,
         )
 
     def test_no_existing_pins_gives_a_single_entry(self) -> None:
-        _, body = build_venue_review_email("DAMSON PARK", FIXTURE, GEOCODED, geocoded=True)
+        _, body = build_venue_review_email("EXAMPLE PARK", FIXTURE, GEOCODED, geocoded=True)
         self.assertIn(
-            "VENUE_ADDRESSES=DAMSON PARK=<paste the address from the FA fixture page>", body
+            "VENUE_ADDRESSES=EXAMPLE PARK=<paste the address from the FA fixture page>", body
         )
         self.assertNotIn("VENUE_ADDRESSES=;", body)
 
     def test_guess_line_offered_only_for_a_correct_pin(self) -> None:
         existing = {"OTHER GROUND": "1 HIGH ST, TOWN, AB1 2CD"}
         _, body = build_venue_review_email(
-            "DAMSON PARK", FIXTURE, GEOCODED, geocoded=True, existing=existing
+            "EXAMPLE PARK", FIXTURE, GEOCODED, geocoded=True, existing=existing
         )
         self.assertIn("If the pin above is correct", body)
         self.assertIn(
             "VENUE_ADDRESSES=OTHER GROUND=1 HIGH ST, TOWN, AB1 2CD;"
-            "DAMSON PARK=3 Damson Pkwy, Solihull B91 2PP, UK",
+            "EXAMPLE PARK=3 Example Pkwy, Exampleton EX2 2BB, UK",
             body,
         )
 
@@ -113,13 +113,13 @@ class ReviewEmailTest(unittest.TestCase):
 
     def test_says_what_to_do_when_the_fa_address_has_no_postcode(self) -> None:
         for geocoded, location in ((True, GEOCODED), (False, {"feature": "X"})):
-            _, body = build_venue_review_email("DAMSON PARK", FIXTURE, location, geocoded)
+            _, body = build_venue_review_email("EXAMPLE PARK", FIXTURE, location, geocoded)
             self.assertIn("no postcode", body.lower())
             self.assertIn("Google Maps", body)
             self.assertIn("without a postcode the pin is ignored", body.lower())
 
     def test_tells_admin_to_recreate_container_and_fix_the_event(self) -> None:
-        _, body = build_venue_review_email("DAMSON PARK", FIXTURE, GEOCODED, geocoded=True)
+        _, body = build_venue_review_email("EXAMPLE PARK", FIXTURE, GEOCODED, geocoded=True)
         self.assertIn("docker compose up -d", body)
         self.assertIn("recreate", body.lower())
         self.assertIn("Spond", body)
@@ -136,7 +136,7 @@ class ReviewEmailTest(unittest.TestCase):
     def test_no_detail_url_does_not_crash(self) -> None:
         fixture = dict(FIXTURE)
         fixture.pop("detail_url")
-        _, body = build_venue_review_email("DAMSON PARK", fixture, GEOCODED, geocoded=True)
+        _, body = build_venue_review_email("EXAMPLE PARK", fixture, GEOCODED, geocoded=True)
         self.assertIn("VENUE_ADDRESSES=", body)
 
 
@@ -169,7 +169,7 @@ class ReportUnpinnedVenueTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _report(self, venue: str = "DAMSON PARK 3G Pitch 1D") -> bool:
+    def _report(self, venue: str = "EXAMPLE PARK 3G Pitch 1D") -> bool:
         return self.main.report_unpinned_venue(venue, FIXTURE, GEOCODED, True)
 
     def test_emails_admin_only_not_parents(self) -> None:
@@ -179,12 +179,12 @@ class ReportUnpinnedVenueTest(unittest.TestCase):
         self.assertIn("Check venue pin", self.sent[0][0])
 
     def test_reports_each_venue_once_even_for_another_pitch(self) -> None:
-        self.assertTrue(self._report("DAMSON PARK 3G Pitch 1D"))
-        self.assertFalse(self._report("DAMSON PARK Pitch 2"))
+        self.assertTrue(self._report("EXAMPLE PARK 3G Pitch 1D"))
+        self.assertFalse(self._report("EXAMPLE PARK Pitch 2"))
         self.assertEqual(len(self.sent), 1)
 
     def test_different_venue_is_reported_separately(self) -> None:
-        self._report("DAMSON PARK")
+        self._report("EXAMPLE PARK")
         self.assertTrue(self._report("OTHER GROUND"))
         self.assertEqual(len(self.sent), 2)
 

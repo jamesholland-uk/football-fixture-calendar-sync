@@ -1,12 +1,12 @@
 """VENUE_ADDRESSES: pin a venue to its FA address so it is never guessed.
 
-The fixtures list page only gives a short name ("DAMSON PARK 3G Pitch 1D"), and
+The fixtures list page only gives a short name ("EXAMPLE PARK 3G Pitch 1D"), and
 guessing a postcode from that can land on the wrong end of a road. Pinning the full
 FA address (copied from the fixture detail page, postcode included) avoids that.
 
 Format: ``VENUE NAME=full address;OTHER VENUE=full address``
 Semicolons separate venues (addresses contain commas). Matching ignores case and
-pitch/3G suffixes, so ``DAMSON PARK`` also covers ``DAMSON PARK 3G Pitch 1D``.
+pitch/3G suffixes, so ``EXAMPLE PARK`` also covers ``EXAMPLE PARK 3G Pitch 1D``.
 """
 
 from __future__ import annotations
