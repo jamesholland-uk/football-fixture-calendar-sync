@@ -158,7 +158,7 @@ The list page needs Playwright. Individual fixture *detail* pages are often bloc
 
 **Spond location not tappable or in the wrong street**  
 Set `GOOGLE_MAPS_API_KEY` and enable Places API. Check logs for `[Places]` vs postcode fallback.  
-If a short FA venue name resolves to the wrong place (e.g. the right road, wrong end), pin it with `VENUE_ADDRESSES` using the full address from the FA fixture page. The log shows `Using pinned VENUE_ADDRESSES entry`.
+If a short FA venue name resolves to the wrong place (e.g. the right road, wrong end), pin it with `VENUE_ADDRESSES` using the full address from the FA fixture page. The log shows `Using pinned VENUE_ADDRESSES entry`. For a pinned venue the app takes Google's exact (`ROOFTOP`) match for the address if there is one; otherwise it asks Places for the named venue in the same postcode, and only then settles for a street-level point. A result outside the pinned postcode is never used. Maps cannot point at a particular pitch, so a named venue is as precise as it gets.
 
 **Calendar location is still the plain FA name**  
 Events created before this feature are not rewritten, because the app only updates an event when the fixture itself changes. New and changed fixtures get the geocoded address. To refresh the others, delete the Calendar event and its entry in `data/synced_fixtures.json` (rename the file first as in the dry-run rehearsal if you want a clean rehearsal), or ask for a one-off backfill.

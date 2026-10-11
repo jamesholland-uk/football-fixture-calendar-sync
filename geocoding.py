@@ -152,13 +152,46 @@ def geocode_google_places(query: str, api_key: str) -> dict | None:
         return {
             "lat": loc["lat"],
             "lon": loc["lng"],
-            "display": f"{name}, {formatted}" if name and name not in formatted else formatted[:80],
+            "display": f"{name}, {formatted}" if name and name not in formatted else shorten_address(formatted),
             "postcode": postcode,
             "source": "google_places",
         }
     except Exception as e:
         print(f"    [Places] Error: {e}")
     return None
+
+
+def shorten_address(text: str, limit: int = 80) -> str:
+    """Shorten an address to `limit` characters without cutting mid-word.
+
+    Whole comma-separated parts are dropped from the middle, never the part with the
+    postcode (the most useful bit for Maps). With no postcode, trailing parts go. A single
+    over-long part is cut at a word boundary as a last resort.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    postcode = extract_postcode(text)
+    tail = ""
+    head = parts
+    if postcode:
+        for i, part in enumerate(parts):
+            if postcode.upper() in part.upper():
+                tail, head = part, parts[:i]
+                break
+    keep: list[str] = []
+    for part in head:
+        if len(", ".join(keep + [part] + ([tail] if tail else []))) > limit:
+            break
+        keep.append(part)
+    result = ", ".join(keep + ([tail] if tail else []))
+    if not result or len(result) > limit:
+        cut = (result or text)[:limit]
+        if " " in cut[limit // 2 :]:
+            cut = cut.rsplit(" ", 1)[0]
+        return cut.rstrip(", ")
+    return result
 
 
 def _google_queries(venue_name: str, postcode: str | None) -> list[str]:
@@ -203,9 +236,12 @@ def geocode_google(query: str, api_key: str) -> dict | None:
                 return {
                     "lat": loc["lat"],
                     "lon": loc["lng"],
-                    "display": r.get("formatted_address", "")[:80],
+                    "display": shorten_address(r.get("formatted_address", "")),
                     "postcode": postcode,
                     "source": "google",
+                    # ROOFTOP is an exact address; GEOMETRIC_CENTER / RANGE_INTERPOLATED /
+                    # APPROXIMATE are street or area level
+                    "location_type": r["geometry"].get("location_type", ""),
                 }
             if data.get("status") == "REQUEST_DENIED":
                 print(f"    Google API error: {data.get('error_message', 'Request denied')}")
@@ -285,11 +321,16 @@ def geocode_pinned(
         query = f"{address}, UK"
         print(f"    [Pinned] [Google] {query}")
         candidate = geocode_google(query, google_api_key)
-        if candidate and normalize_postcode(candidate.get("postcode") or "") == wanted:
-            return candidate, f"pinned address {postcode} (Google confirmed)"
-        if candidate:
+        in_postcode = bool(
+            candidate and normalize_postcode(candidate.get("postcode") or "") == wanted
+        )
+        if candidate and not in_postcode:
             print(f"    [Pinned] Google gave {candidate.get('postcode')}, not {postcode}; rejected")
+        if in_postcode and candidate.get("location_type") == "ROOFTOP":
+            return candidate, f"pinned address {postcode} (Google confirmed)"
 
+        # Google's answer is missing, in the wrong postcode, or only street level. The
+        # named place (e.g. the school itself) is more precise if it is in the same postcode.
         places_q = f"{clean_venue_name(venue_name)}, {postcode}, UK"
         print(f"    [Pinned] [Places] {places_q}")
         places = geocode_google_places(places_q, google_api_key)
@@ -297,6 +338,8 @@ def geocode_pinned(
             return places, f"pinned address {postcode} (Places confirmed)"
         if places:
             print(f"    [Pinned] Places gave {places.get('postcode')}, not {postcode}; rejected")
+        if in_postcode:
+            return candidate, f"pinned address {postcode} (Google confirmed, street level)"
 
     baseline = geocode_postcode_io(postcode)
     if baseline:
