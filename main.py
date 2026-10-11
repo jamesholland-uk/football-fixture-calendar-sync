@@ -201,16 +201,28 @@ def resolve_venue_location(fixture: dict, is_home: bool) -> dict:
 def calendar_location_text(location: dict, venue: str) -> str:
     """Text for a Calendar event's location, which is free text (no coordinates field).
 
-    The geocoded address makes Google Maps resolve the right ground. A bare postcode
-    centroid gets the venue name in front so it still reads as a place.
+    The geocoded address makes Google Maps resolve the right ground, but it needs its
+    postcode to do so reliably. Cases:
+    - complete address (postcode present): used as is
+    - bare postcode centroid: venue name + postcode, so it still reads as a place
+    - address cut short (Google results are truncated to 80 chars, losing the postcode
+      at the end): the place name + postcode instead of text cut mid-word
+    - not geocoded: the FA venue name
     """
+    address_line = (location.get("addressLine") or "").strip()
+    if not address_line:
+        return venue
     postcode = (location.get("postalCode") or "").strip()
-    address = (location.get("addressLine") or "").strip()
-    if address and not (postcode and address.upper().startswith(postcode.upper())):
-        return address
-    if location.get("latitude") is not None and postcode:
-        return f"{venue}, {postcode}"
-    return venue
+    if not postcode:
+        return address_line
+    if postcode.upper() in address_line.upper():
+        if address_line.upper().startswith(postcode.upper()):
+            return f"{venue}, {postcode}"
+        return address_line
+    name = (location.get("address") or "").strip()
+    if name and name.upper() != postcode.upper():
+        return f"{name}, {postcode}"
+    return f"{venue}, {postcode}"
 
 
 def calendar_location_or_empty(fixture: dict) -> dict:
@@ -718,6 +730,15 @@ def build_calendar_event(fixture: dict, location: dict | None = None) -> dict | 
     return event
 
 
+def print_calendar_location(event: dict) -> None:
+    """Dry-run only: show the location and map link a Calendar event would get."""
+    if event.get("location"):
+        print(f"  [DRY RUN] Location: {event['location']}")
+    for line in event.get("description", "").splitlines():
+        if line.startswith("Map: "):
+            print(f"  [DRY RUN] {line}")
+
+
 def create_calendar_event(
     service, calendar_id: str, fixture: dict, location: dict | None = None
 ) -> str | None:
@@ -728,6 +749,7 @@ def create_calendar_event(
 
     if DRY_RUN:
         print(f"  [DRY RUN] Would create Calendar event: {event['summary']} on {fixture['date']}")
+        print_calendar_location(event)
         return "dry-run-event-id"  # truthy so the sync does not report a failure
 
     try:
@@ -749,6 +771,7 @@ def update_calendar_event(
 
     if DRY_RUN:
         print(f"  [DRY RUN] Would update Calendar event: {event['summary']} on {fixture['date']}")
+        print_calendar_location(event)
         return True
 
     try:

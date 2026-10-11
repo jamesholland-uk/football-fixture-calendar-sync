@@ -62,6 +62,27 @@ class CalendarLocationTextTest(unittest.TestCase):
             "EXAMPLE PARK 3G Pitch 1D, EX1 1AA",
         )
 
+    def test_address_cut_at_80_chars_loses_postcode_so_name_and_postcode_are_used(self) -> None:
+        # Google results are truncated to 80 chars upstream; the postcode is at the end
+        cut = dict(
+            GEOCODED,
+            address="The Example Arena & Community Stadium",
+            addressLine="The Example Arena & Community Stadium, Example Rd, The Royal Town of Exampleto",
+        )
+        self.assertNotIn("EX1 1AA", cut["addressLine"])
+        self.assertEqual(
+            main.calendar_location_text(cut, "EXAMPLE PARK 3G Pitch 1D"),
+            "The Example Arena & Community Stadium, EX1 1AA",
+        )
+
+    def test_cut_address_with_no_usable_name_uses_the_venue_and_postcode(self) -> None:
+        cut = dict(GEOCODED, address="EX1 1AA", addressLine="EX1 1AA (a very long district name that goes on")
+        cut["addressLine"] = "x" * 80
+        self.assertEqual(
+            main.calendar_location_text(cut, "EXAMPLE PARK 3G Pitch 1D"),
+            "EXAMPLE PARK 3G Pitch 1D, EX1 1AA",
+        )
+
     def test_not_geocoded_falls_back_to_the_fa_name(self) -> None:
         self.assertEqual(main.calendar_location_text({}, "EXAMPLE PARK"), "EXAMPLE PARK")
         self.assertEqual(
@@ -90,6 +111,22 @@ class BuildCalendarEventTest(unittest.TestCase):
         fixture = {k: v for k, v in FIXTURE.items() if k != "venue"}
         event, _ = _quiet(main.build_calendar_event, fixture, {})
         self.assertNotIn("location", event)
+
+
+class DryRunShowsTheCalendarLocationTest(unittest.TestCase):
+    def test_dry_run_prints_the_location_and_map_link(self) -> None:
+        with patch.object(main, "DRY_RUN", True):
+            event_id, out = _quiet(main.create_calendar_event, MagicMock(), "cal", FIXTURE, GEOCODED)
+        self.assertTrue(event_id)
+        self.assertIn("[DRY RUN] Would create Calendar event", out)
+        self.assertIn(f"Location: {GEOCODED['addressLine']}", out)
+        self.assertIn("google.com/maps?q=50.09,-1.09", out)
+
+    def test_dry_run_update_prints_the_location_too(self) -> None:
+        with patch.object(main, "DRY_RUN", True):
+            ok, out = _quiet(main.update_calendar_event, MagicMock(), "cal", "evt", FIXTURE, GEOCODED)
+        self.assertTrue(ok)
+        self.assertIn(f"Location: {GEOCODED['addressLine']}", out)
 
 
 class ResolveVenueLocationTest(unittest.TestCase):
