@@ -99,6 +99,7 @@ docker compose up -d --build
 | `SPOND_GROUP_IDS` | Group IDs, one per team, same order as `FIXTURE_URLS` | off |
 | `SPOND_HOST_IDS` | Event owner member IDs. Comma between teams; `id1\|id2` for multiple hosts on one team | your Spond user |
 | `GOOGLE_MAPS_API_KEY` | Geocoding + Places for Spond locations | postcode fallback |
+| `VENUE_ADDRESSES` | `VENUE NAME=full FA address;Other=address` pins a venue to its address (postcode required) so the Spond pin is never guessed from a short name. Semicolon between venues; case and `3G`/`Pitch` suffixes ignored | guessed |
 | `DRY_RUN` | `true` = no Calendar/Spond writes and no `synced_fixtures.json` update | `false` |
 | `DATA_DIR` | Persistence directory | `/app/data` |
 
@@ -156,7 +157,11 @@ python3 test_spond_hosts.py                       # no extra deps
 The list page needs Playwright. Individual fixture *detail* pages are often blocked; the app does not rely on them.
 
 **Spond location not tappable or in the wrong street**  
-Set `GOOGLE_MAPS_API_KEY` and enable Places API. Check logs for `[Places]` vs postcode fallback.
+Set `GOOGLE_MAPS_API_KEY` and enable Places API. Check logs for `[Places]` vs postcode fallback.  
+If a short FA venue name resolves to the wrong place (e.g. the right road, wrong end), pin it with `VENUE_ADDRESSES` using the full address from the FA fixture page. The log shows `Using pinned VENUE_ADDRESSES entry`.
+
+**Does the FA list page carry the full address?**  
+With `DRY_RUN=true` the log prints each row's raw venue-cell HTML, and makes one plain attempt at one fixture detail page in the same browser session. It reports `BLOCKED by Cloudflare challenge` (and does not retry) or, if the page loads, saves it to `data/detail_probe.html`. It never tries to bypass the challenge.
 
 **Spond 400 / host not in group**  
 Use the member `id` from the group payload, not `clubMembershipId`.
@@ -173,6 +178,8 @@ SMTP cannot tell you the container has died — nothing is left to send mail. Us
 
 1. **Failure email** (`EMAIL_TO_ADMIN`, same SMTP as fixture mail): scrape failures, missing fixtures table, Calendar/Spond write errors, and uncaught exceptions. A follow-up mail is sent when the next poll succeeds. New-fixture notices still go only to `EMAIL_TO`.
 2. **Healthchecks.io** (optional `HEALTHCHECKS_PING_URL`): the container GETs this URL after every poll, even a failed one. If the ping stops, Healthchecks emails you. Set the check period to `POLL_INTERVAL_HOURS` (e.g. 12h) with ~1 hour grace.
+
+3. **Venue check email** (`EMAIL_TO_ADMIN` only, never `EMAIL_TO`): the FA list page only gives a short venue name, so a Spond map pin for a venue not in `VENUE_ADDRESSES` is a guess. The first time each venue appears, the admin gets the resolved address, a Maps link and the FA fixture page to check it against, plus the `VENUE_ADDRESSES` line to add if it is wrong. Each venue is reported once (tracked in `data/reviewed_venues.json`; delete an entry to be told again). Pinned venues are never reported. If the venue cannot be located at all, the email says so.
 
 Compose also marks the container unhealthy if `data/last_run` is older than about 2.5 poll intervals (Dockge will show it; it does not send email by itself).
 

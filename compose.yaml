@@ -36,6 +36,8 @@ services:
       # Google Maps API key for Spond pins (Geocoding + Places APIs)
       # Get a key at: https://console.cloud.google.com/google/maps-apis/credentials
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      # Pinned FA addresses for venues the app would otherwise guess (Name=address;Name2=address2)
+      - VENUE_ADDRESSES=${VENUE_ADDRESSES:-}
       # Dry run mode - test without creating events (true/false)
       - DRY_RUN=${DRY_RUN:-false}
       # Data directory for persistence

@@ -254,14 +254,65 @@ def search_postcode_web(venue_name: str, team_name: str = "") -> tuple[str | Non
     return None, "web search found no postcode"
 
 
+def geocode_pinned(
+    venue_name: str,
+    address: str,
+    google_api_key: str | None,
+) -> tuple[dict | None, str]:
+    """Geocode a venue whose full FA address is known (VENUE_ADDRESSES).
+
+    The postcode in the address is the source of truth. A Google or Places result is
+    only accepted if it lands in that exact postcode; otherwise the postcode centroid
+    is used, so a wrong street-level guess can never win. Returns (None, reason) if the
+    address has no postcode, so the caller can fall back to the normal pipeline.
+    """
+    postcode = extract_postcode(address)
+    if not postcode:
+        return None, f"pinned address has no postcode: {address}"
+    wanted = normalize_postcode(postcode)
+
+    if google_api_key:
+        query = f"{address}, UK"
+        print(f"    [Pinned] [Google] {query}")
+        candidate = geocode_google(query, google_api_key)
+        if candidate and normalize_postcode(candidate.get("postcode") or "") == wanted:
+            return candidate, f"pinned address {postcode} (Google confirmed)"
+        if candidate:
+            print(f"    [Pinned] Google gave {candidate.get('postcode')}, not {postcode}; rejected")
+
+        places_q = f"{clean_venue_name(venue_name)}, {postcode}, UK"
+        print(f"    [Pinned] [Places] {places_q}")
+        places = geocode_google_places(places_q, google_api_key)
+        if places and normalize_postcode(places.get("postcode") or "") == wanted:
+            return places, f"pinned address {postcode} (Places confirmed)"
+        if places:
+            print(f"    [Pinned] Places gave {places.get('postcode')}, not {postcode}; rejected")
+
+    baseline = geocode_postcode_io(postcode)
+    if baseline:
+        return baseline, f"pinned address {postcode} (postcode centroid)"
+    return None, f"pinned address {postcode}: postcode lookup failed"
+
+
 def geocode_chosen(
     venue_name: str,
     team_name: str = "",
     google_api_key: str | None = None,
+    address: str | None = None,
 ) -> tuple[dict | None, str]:
-    """Run the chosen pipeline. Returns (result, decision reason)."""
+    """Run the chosen pipeline. Returns (result, decision reason).
+
+    If ``address`` (a pinned FA address from VENUE_ADDRESSES) is given, it replaces the
+    web-search guess entirely.
+    """
     if google_api_key is None:
         google_api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "") or None
+
+    if address:
+        result, reason = geocode_pinned(venue_name, address, google_api_key)
+        if result:
+            return result, reason
+        print(f"    [Pinned] {reason}; falling back to the normal pipeline")
 
     postcode, postcode_reason = search_postcode_web(venue_name, team_name)
     if not postcode:
@@ -361,9 +412,11 @@ def to_spond_location(result: dict, venue_name: str) -> dict:
     }
 
 
-def geocode_venue(venue_name: str, opponent_team: str = "") -> dict | None:
+def geocode_venue(
+    venue_name: str, opponent_team: str = "", address: str | None = None
+) -> dict | None:
     """Geocode a fixture venue for Spond. Returns a Spond location dict or None."""
-    result, reason = geocode_chosen(venue_name, opponent_team)
+    result, reason = geocode_chosen(venue_name, opponent_team, address=address)
     if not result:
         print(f"    [Geocode] Failed: {reason}")
         return None

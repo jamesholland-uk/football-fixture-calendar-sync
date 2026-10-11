@@ -22,6 +22,14 @@ from spond import spond
 
 from geocoding import geocode_venue
 from spond_hosts import parse_spond_host_slots
+from venue_addresses import find_venue_address, parse_venue_addresses
+from venue_review import (
+    build_venue_review_email,
+    classify_detail_page,
+    load_reviewed_venues,
+    mark_venue_reviewed,
+    venue_review_key,
+)
 from team_colours import kit_colour_for_fixture, load_team_colours
 
 # Configuration from environment variables
@@ -51,6 +59,8 @@ SPOND_EMAIL = os.environ.get("SPOND_EMAIL", "")
 SPOND_PASSWORD = os.environ.get("SPOND_PASSWORD", "")
 SPOND_GROUP_IDS = os.environ.get("SPOND_GROUP_IDS", "").split(",")  # One per team
 SPOND_HOST_SLOTS = parse_spond_host_slots(os.environ.get("SPOND_HOST_IDS", ""))
+# Pinned FA addresses so ambiguous short venue names are never guessed
+VENUE_ADDRESSES = parse_venue_addresses(os.environ.get("VENUE_ADDRESSES", ""))
 
 # Dry run mode - test without creating events
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("true", "1", "yes")
@@ -126,6 +136,42 @@ def send_alert(subject: str, body: str) -> None:
         print(body)
         return
     send_email(prefixed, body, EMAIL_TO_ADMIN)
+
+
+def reviewed_venues_path() -> Path:
+    return Path(DATA_DIR) / "reviewed_venues.json"
+
+
+def report_unpinned_venue(venue: str, fixture: dict, location: dict, geocoded: bool) -> bool:
+    """Email EMAIL_TO_ADMIN once per venue whose pin was guessed (not in VENUE_ADDRESSES).
+
+    Never raises: a reporting problem must not stop the Spond event being created.
+    Returns True if a report was emailed.
+    """
+    try:
+        key = venue_review_key(venue)
+        path = reviewed_venues_path()
+        if key in load_reviewed_venues(path):
+            return False
+        subject, body = build_venue_review_email(
+            venue, fixture, location, geocoded, existing=VENUE_ADDRESSES
+        )
+        if DRY_RUN:
+            print(f"  [DRY RUN] Would email admin about venue: {subject}")
+            print(body)
+            return False
+        if not (smtp_configured() and EMAIL_TO_ADMIN.strip()):
+            print(f"  Venue needs checking (admin email not configured): {subject}")
+            print(body)
+            return False
+        if not send_email(f"[fixture-sync] {subject}", body, EMAIL_TO_ADMIN):
+            return False
+        resolved = location.get("addressLine") or "(not located)"
+        mark_venue_reviewed(path, key, resolved)
+        return True
+    except Exception as e:
+        print(f"  Venue report failed (continuing): {e}")
+        return False
 
 
 def send_email_notification(fixture: dict) -> bool:
@@ -236,7 +282,13 @@ async def create_spond_event(fixture: dict, group_id: str, host_ids: list[str] |
             if not is_home:
                 opponent_hint = fixture.get("home_team", "")  # Away game = at opponent's ground
             
-            geocoded = geocode_venue(venue, opponent_hint)
+            pinned_address = find_venue_address(venue, VENUE_ADDRESSES)
+            if pinned_address:
+                print(f"  Using pinned VENUE_ADDRESSES entry for: {venue}")
+            geocoded = geocode_venue(venue, opponent_hint, address=pinned_address)
+            if not pinned_address:
+                # Short FA name only: the pin is a guess, so ask the admin to check it once
+                report_unpinned_venue(venue, fixture, geocoded or {"feature": venue}, bool(geocoded))
             
             if geocoded:
                 location = geocoded
@@ -363,6 +415,35 @@ def save_synced_fixtures(synced: dict) -> None:
         json.dump(synced, f, indent=2)
 
 
+def probe_detail_page(context, fixtures: list[dict]) -> None:
+    """Dry-run diagnostic: one plain visit to one detail page. Never retries or works
+    around a challenge; it only reports what happened."""
+    target = next((f for f in fixtures if f.get("detail_url")), None)
+    if not target:
+        print("  [DRY RUN] Detail probe: no detail URL found on the list page")
+        return
+    url = target["detail_url"]
+    print(f"  [DRY RUN] Detail probe (single attempt): {url}")
+    try:
+        page = context.new_page()
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        html = page.content()
+        kind, snippet = classify_detail_page(page.title(), html)
+        if kind == "challenge":
+            print("  [DRY RUN] Detail probe: BLOCKED by Cloudflare challenge. Not retrying.")
+        elif kind == "address":
+            out = Path(DATA_DIR) / "detail_probe.html"
+            Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+            out.write_text(html, encoding="utf-8")
+            print(f"  [DRY RUN] Detail probe: OK, address text found: ...{snippet}")
+            print(f"  [DRY RUN] Detail probe: page saved to {out}")
+        else:
+            print("  [DRY RUN] Detail probe: page loaded but no postcode found in it")
+        page.close()
+    except Exception as e:
+        print(f"  [DRY RUN] Detail probe failed: {e}")
+
+
 def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
     """Fetch fixtures from an FA Full-Time fixtures page.
 
@@ -452,6 +533,7 @@ def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
 
                     # Find venue - it's the cell after road-team
                     venue = ""
+                    venue_cell_html = ""
                     competition = ""
                     
                     all_cells = row.find_all("td")
@@ -469,6 +551,7 @@ def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
                             text = cell.get_text(strip=True)
                             if text:
                                 venue = text
+                                venue_cell_html = str(cell)
                                 venue_found = True
                             continue
                         
@@ -490,13 +573,19 @@ def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
                     }
                     fixtures.append(fixture)
                     print(f"  Found: {date_str} {time_str} - {home_team} vs {away_team}")
+                    if DRY_RUN:
+                        # Does the list page carry more than the short venue name?
+                        print(f"    [DRY RUN] venue cell HTML: {venue_cell_html}")
 
                 except Exception as e:
                     print(f"  Error parsing row: {e}")
                     continue
 
-            # Note: Detail page fetching disabled due to Cloudflare blocking
-            # Use VENUE_ADDRESSES env var for manual address mapping instead
+            # Detail pages are not used for syncing (Cloudflare usually blocks them).
+            # Use VENUE_ADDRESSES for pinned addresses. In dry run only, make a single
+            # plain attempt in this same browser session to see whether that has changed.
+            if DRY_RUN:
+                probe_detail_page(context, fixtures)
             
             browser.close()
             return fixtures, None
