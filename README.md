@@ -174,11 +174,12 @@ Stop the container, delete `data/synced_fixtures.json`, start again. Every fixtu
 
 **Rehearse every fixture as new (dry run) without creating duplicates**  
 Dry-run never writes `synced_fixtures.json`, so *rename* it, never delete it. If it is missing when you go live, every fixture is created a second time.
+Run these one at a time, with `DRY_RUN=true` already active (the container runs as root, so the files in `data/` are root-owned and need `sudo`):
 ```
-mv data/synced_fixtures.json data/synced_fixtures.json.bak   # with DRY_RUN=true
-docker compose up -d --force-recreate && docker compose logs -f
-# read the geocoding, Calendar/Spond events and emails that WOULD happen, then:
-mv data/synced_fixtures.json.bak data/synced_fixtures.json   # restore BEFORE going live
+sudo mv data/synced_fixtures.json data/synced_fixtures.json.bak
+docker compose restart && docker compose logs -f --since 1m
+# Ctrl-C after the poll; read what WOULD happen (geocoding, Calendar/Spond events, emails)
+sudo mv data/synced_fixtures.json.bak data/synced_fixtures.json   # restore BEFORE going live
 ```
 Restore the file *before* setting `DRY_RUN=false`. Never go live while it is renamed.
 
