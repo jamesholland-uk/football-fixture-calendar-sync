@@ -78,26 +78,27 @@ def _parse_env(path: Path) -> dict[str, str]:
 class SyncRoutingTests(unittest.TestCase):
     def test_first_url_spond_only_and_second_url_calendar_only(self) -> None:
         calendar_calls: list[tuple[str, str]] = []
-        spond_calls: list[tuple[str, str, str]] = []
+        spond_calls: list[tuple[str, list[str], str]] = []
 
-        def fake_calendar(service, calendar_id: str, fixture: dict) -> str:
+        def fake_calendar(service, calendar_id: str, fixture: dict, location: dict | None = None) -> str:
             calendar_calls.append((calendar_id, fixture["home_team"]))
             return "event-1"
 
-        def fake_spond(fixture: dict, group_id: str, host_id: str = "") -> bool:
-            spond_calls.append((group_id, host_id, fixture["home_team"]))
+        def fake_spond(fixture: dict, group_id: str, host_ids: list[str] | None = None) -> bool:
+            spond_calls.append((group_id, host_ids or [], fixture["home_team"]))
             return True
 
         with patch.multiple(
             main,
             CALENDAR_IDS=["", "second@group.calendar.google.com"],
             SPOND_GROUP_IDS=["group-for-first-url"],
-            SPOND_HOST_IDS=["host-for-first-url"],
+            SPOND_HOST_SLOTS=[["host-for-first-url"]],
             DRY_RUN=True,
         ):
             with (
                 patch.object(main, "create_calendar_event", fake_calendar),
                 patch.object(main, "create_spond_event_sync", fake_spond),
+                patch.object(main, "resolve_venue_location", return_value={}),
                 patch.object(main, "get_calendar_service", return_value=object()),
                 patch.object(main, "load_synced_fixtures", return_value={}),
                 patch.object(main, "save_synced_fixtures") as save_synced,
@@ -113,7 +114,7 @@ class SyncRoutingTests(unittest.TestCase):
 
         self.assertEqual(errors, [])
         self.assertEqual(calendar_calls, [("second@group.calendar.google.com", "Second URL")])
-        self.assertEqual(spond_calls, [("group-for-first-url", "host-for-first-url", "First URL")])
+        self.assertEqual(spond_calls, [("group-for-first-url", ["host-for-first-url"], "First URL")])
         save_synced.assert_not_called()
 
     def test_blank_calendar_slot_passes_validation(self) -> None:

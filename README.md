@@ -7,7 +7,7 @@ There is no official FA API. The container uses a headless browser to load the f
 ## Features
 
 - Scrapes FA Full-Time fixture lists (Playwright, to get past Cloudflare)
-- Optional Google Calendar sync (one calendar per team)
+- Optional Google Calendar sync (one calendar per team). The event location is the geocoded address (not just the FA text), with an exact-coordinates `Map:` link in the description. Calendar has no coordinates field, so this is the closest it gets to a pin
 - Optional Spond match events (one group per team), with clickable map pins
 - Updates existing calendar events when kick-off, opponent, or venue changes
 - Email notifications for newly found fixtures
@@ -99,7 +99,7 @@ docker compose up -d --build
 | `SPOND_GROUP_IDS` | Group IDs, one per team, same order as `FIXTURE_URLS` | off |
 | `SPOND_HOST_IDS` | Event owner member IDs. Comma between teams; `id1\|id2` for multiple hosts on one team | your Spond user |
 | `GOOGLE_MAPS_API_KEY` | Geocoding + Places for Spond locations | postcode fallback |
-| `VENUE_ADDRESSES` | `VENUE NAME=full FA address;Other=address` pins a venue to its address (postcode required) so the Spond pin is never guessed from a short name. Semicolon between venues; case and `3G`/`Pitch` suffixes ignored | guessed |
+| `VENUE_ADDRESSES` | `VENUE NAME=full FA address;Other=address` pins a venue to its address (postcode required) so the Spond pin and Calendar location are never guessed from a short name. Semicolon between venues; case and `3G`/`Pitch` suffixes ignored | guessed |
 | `DRY_RUN` | `true` = full dry run: no Calendar or Spond writes, no emails of any kind (fixture, venue-check or failure alerts; they are logged as `[DRY RUN] Would email …`), no `synced_fixtures.json` or `reviewed_venues.json` update. Still happens: reading FA, geocoding, a read-only Spond login, the Healthchecks ping and `data/last_run` | `false` |
 | `DATA_DIR` | Persistence directory | `/app/data` |
 
@@ -160,6 +160,9 @@ The list page needs Playwright. Individual fixture *detail* pages are often bloc
 Set `GOOGLE_MAPS_API_KEY` and enable Places API. Check logs for `[Places]` vs postcode fallback.  
 If a short FA venue name resolves to the wrong place (e.g. the right road, wrong end), pin it with `VENUE_ADDRESSES` using the full address from the FA fixture page. The log shows `Using pinned VENUE_ADDRESSES entry`.
 
+**Calendar location is still the plain FA name**  
+Events created before this feature are not rewritten, because the app only updates an event when the fixture itself changes. New and changed fixtures get the geocoded address. To refresh the others, delete the Calendar event and its entry in `data/synced_fixtures.json` (rename the file first as in the dry-run rehearsal if you want a clean rehearsal), or ask for a one-off backfill.
+
 **Spond 400 / host not in group**  
 Use the member `id` from the group payload, not `clubMembershipId`.
 
@@ -187,7 +190,7 @@ SMTP cannot tell you the container has died — nothing is left to send mail. Us
 1. **Failure email** (`EMAIL_TO_ADMIN`, same SMTP as fixture mail): scrape failures, missing fixtures table, Calendar/Spond write errors, and uncaught exceptions. A follow-up mail is sent when the next poll succeeds. New-fixture notices still go only to `EMAIL_TO`.
 2. **Healthchecks.io** (optional `HEALTHCHECKS_PING_URL`): the container GETs this URL after every poll, even a failed one. If the ping stops, Healthchecks emails you. Set the check period to `POLL_INTERVAL_HOURS` (e.g. 12h) with ~1 hour grace.
 
-3. **Venue check email** (`EMAIL_TO_ADMIN` only, never `EMAIL_TO`): the FA list page only gives a short venue name, so a Spond map pin for a venue not in `VENUE_ADDRESSES` is a guess. The first time each venue appears, the admin gets the resolved address, a Maps link and the FA fixture page to check it against, plus the `VENUE_ADDRESSES` line to add if it is wrong. Each venue is reported once (tracked in `data/reviewed_venues.json`; delete an entry to be told again). Pinned venues are never reported. If the venue cannot be located at all, the email says so.
+3. **Venue check email** (`EMAIL_TO_ADMIN` only, never `EMAIL_TO`): the FA list page only gives a short venue name, so the map pin (Spond and Calendar) for a venue not in `VENUE_ADDRESSES` is a guess. The first time each venue appears, the admin gets the resolved address, a Maps link and the FA fixture page to check it against, plus the `VENUE_ADDRESSES` line to add if it is wrong. Each venue is reported once (tracked in `data/reviewed_venues.json`; delete an entry to be told again). Pinned venues are never reported. If the venue cannot be located at all, the email says so.
 
 Compose also marks the container unhealthy if `data/last_run` is older than about 2.5 poll intervals (Dockge will show it; it does not send email by itself).
 

@@ -145,6 +145,83 @@ def reviewed_venues_path() -> Path:
     return Path(DATA_DIR) / "reviewed_venues.json"
 
 
+def fixture_is_home(fixture: dict) -> tuple[str | None, bool]:
+    """Return (kit colour, is_home) for a fixture.
+
+    TEAM_COLOURS names are our teams; otherwise a TEAM_NAMES translation of the home
+    side is used as a heuristic.
+    """
+    kit_colour, coloured_home = kit_colour_for_fixture(fixture, TEAM_COLOURS)
+    if coloured_home is not None:
+        return kit_colour, coloured_home
+    return kit_colour, translate_team_name(fixture["home_team"]) != fixture["home_team"]
+
+
+# (venue, hint, pinned address) -> geocoded location, so one venue is looked up once per
+# run even if it is needed for Spond and Calendar, or for several fixtures. Only
+# successful lookups are cached, so a failure is retried on the next fixture.
+_LOCATION_CACHE: dict[tuple[str, str, str], dict] = {}
+
+
+def resolve_venue_location(fixture: dict, is_home: bool) -> dict:
+    """Spond-style location for a fixture's venue, used by Spond and Calendar.
+
+    {} when the fixture has no venue, {"feature": venue} when geocoding failed, otherwise
+    the geocoded dict (coordinates, address, postcode). A pinned VENUE_ADDRESSES entry
+    wins; a venue with no pin is reported to the admin once for checking.
+    """
+    venue_raw = fixture.get("venue", "")
+    if not venue_raw:
+        return {}
+    venue = fixture_venue_name(venue_raw)
+
+    # An away game is at the opponent's ground, so pass them as the geocoding hint
+    opponent_hint = "" if is_home else fixture.get("home_team", "")
+    pinned_address = find_venue_address(venue, VENUE_ADDRESSES)
+
+    cache_key = (venue, opponent_hint, pinned_address or "")
+    if cache_key in _LOCATION_CACHE:
+        return _LOCATION_CACHE[cache_key]
+
+    if pinned_address:
+        print(f"  Using pinned VENUE_ADDRESSES entry for: {venue}")
+    geocoded = geocode_venue(venue, opponent_hint, address=pinned_address)
+    if not pinned_address:
+        # Short FA name only: the pin is a guess, so ask the admin to check it once
+        report_unpinned_venue(venue, fixture, geocoded or {"feature": venue}, bool(geocoded))
+
+    if geocoded:
+        print(f"  Geocoded: {venue} -> {geocoded.get('addressLine', 'found')}")
+        _LOCATION_CACHE[cache_key] = geocoded
+        return geocoded
+    print(f"  Geocoding failed, using plain text: {venue}")
+    return {"feature": venue}
+
+
+def calendar_location_text(location: dict, venue: str) -> str:
+    """Text for a Calendar event's location, which is free text (no coordinates field).
+
+    The geocoded address makes Google Maps resolve the right ground. A bare postcode
+    centroid gets the venue name in front so it still reads as a place.
+    """
+    postcode = (location.get("postalCode") or "").strip()
+    address = (location.get("addressLine") or "").strip()
+    if address and not (postcode and address.upper().startswith(postcode.upper())):
+        return address
+    if location.get("latitude") is not None and postcode:
+        return f"{venue}, {postcode}"
+    return venue
+
+
+def calendar_location_or_empty(fixture: dict) -> dict:
+    """resolve_venue_location, but a geocoding problem must never block the Calendar event."""
+    try:
+        return resolve_venue_location(fixture, fixture_is_home(fixture)[1])
+    except Exception as e:
+        print(f"  Location lookup failed, using the FA venue text: {e}")
+        return {}
+
+
 def report_unpinned_venue(venue: str, fixture: dict, location: dict, geocoded: bool) -> bool:
     """Email EMAIL_TO_ADMIN once per venue whose pin was guessed (not in VENUE_ADDRESSES).
 
@@ -245,13 +322,7 @@ async def create_spond_event(fixture: dict, group_id: str, host_ids: list[str] |
         away_team_translated = translate_team_name(fixture["away_team"])
         ko_time = kickoff_dt.strftime("%H:%M")
         
-        # Determine if home or away. TEAM_COLOURS names are our teams; otherwise
-        # a TEAM_NAMES translation of the home side is used as a heuristic.
-        kit_colour, coloured_home = kit_colour_for_fixture(fixture, TEAM_COLOURS)
-        if coloured_home is not None:
-            is_home = coloured_home
-        else:
-            is_home = home_team_translated != fixture["home_team"]
+        kit_colour, is_home = fixture_is_home(fixture)
         match_type = "HOME" if is_home else "AWAY"
         opponent = fixture["away_team"] if is_home else fixture["home_team"]
         
@@ -271,34 +342,9 @@ async def create_spond_event(fixture: dict, group_id: str, host_ids: list[str] |
         append_detail_url(description_parts, fixture)
         description = "\n".join(description_parts)
         
-        # Build location - try geocoding for clickable map links
-        location = {}
-        venue_raw = fixture.get("venue", "")
-        if venue_raw:
-            # Remove time suffix if present (e.g., "VENUE NAME - 11:00AM" -> "VENUE NAME")
-            venue = fixture_venue_name(venue_raw)
-            
-            # For away games, pass opponent team as geocoding hint
-            opponent_hint = ""
-            if not is_home:
-                opponent_hint = fixture.get("home_team", "")  # Away game = at opponent's ground
-            
-            pinned_address = find_venue_address(venue, VENUE_ADDRESSES)
-            if pinned_address:
-                print(f"  Using pinned VENUE_ADDRESSES entry for: {venue}")
-            geocoded = geocode_venue(venue, opponent_hint, address=pinned_address)
-            if not pinned_address:
-                # Short FA name only: the pin is a guess, so ask the admin to check it once
-                report_unpinned_venue(venue, fixture, geocoded or {"feature": venue}, bool(geocoded))
-            
-            if geocoded:
-                location = geocoded
-                print(f"  Geocoded: {venue} -> {geocoded.get('addressLine', 'found')}")
-            else:
-                # Fall back to plain text
-                print(f"  Geocoding failed, using plain text: {venue}")
-                location = {"feature": venue}
-        
+        # Geocoded for a clickable map pin (shared with Calendar, cached per venue)
+        location = resolve_venue_location(fixture, is_home)
+
         # Build Spond event payload for a match event
         event_data = {
             "heading": heading,
@@ -605,7 +651,7 @@ def translate_team_name(full_name: str) -> str:
     return short_name
 
 
-def build_calendar_event(fixture: dict) -> dict | None:
+def build_calendar_event(fixture: dict, location: dict | None = None) -> dict | None:
     """Build a Google Calendar event dict from a fixture."""
     kickoff_dt = parse_fixture_datetime(fixture["date"], fixture["time"])
     if not kickoff_dt:
@@ -635,6 +681,10 @@ def build_calendar_event(fixture: dict) -> dict | None:
     ]
     if fixture.get("venue"):
         description_parts.append(f"Venue: {fixture['venue']}")
+        if location and location.get("latitude") is not None:
+            description_parts.append(
+                f"Map: https://www.google.com/maps?q={location['latitude']},{location['longitude']}"
+            )
     if fixture.get("competition"):
         description_parts.append(f"Competition: {fixture['competition']}")
     append_detail_url(description_parts, fixture)
@@ -659,17 +709,20 @@ def build_calendar_event(fixture: dict) -> dict | None:
         },
     }
 
-    # Add venue as location if available
+    # Add venue as location if available. Calendar location is free text, so a geocoded
+    # address goes there and the exact coordinates go in the description as a Map link.
     if fixture.get("venue"):
-        # Extract just the venue name (remove time suffix if present)
-        event["location"] = fixture_venue_name(fixture["venue"])
+        venue = fixture_venue_name(fixture["venue"])  # no time suffix or trailing space
+        event["location"] = calendar_location_text(location or {}, venue)
 
     return event
 
 
-def create_calendar_event(service, calendar_id: str, fixture: dict) -> str | None:
+def create_calendar_event(
+    service, calendar_id: str, fixture: dict, location: dict | None = None
+) -> str | None:
     """Create a Google Calendar event for a fixture. Returns event ID or None."""
-    event = build_calendar_event(fixture)
+    event = build_calendar_event(fixture, location)
     if not event:
         return None
 
@@ -686,9 +739,11 @@ def create_calendar_event(service, calendar_id: str, fixture: dict) -> str | Non
         return None
 
 
-def update_calendar_event(service, calendar_id: str, event_id: str, fixture: dict) -> bool:
+def update_calendar_event(
+    service, calendar_id: str, event_id: str, fixture: dict, location: dict | None = None
+) -> bool:
     """Update an existing Google Calendar event. Returns True on success."""
-    event = build_calendar_event(fixture)
+    event = build_calendar_event(fixture, location)
     if not event:
         return False
 
@@ -736,14 +791,18 @@ def sync_to_calendar(all_fixtures: list[tuple[int, dict]]) -> list[str]:
             
             print(f"  Fixture changed for {fixture['date']} - updating...")
             if service and calendar_id and existing.get("event_id"):
-                if not update_calendar_event(service, calendar_id, existing["event_id"], fixture):
+                location = calendar_location_or_empty(fixture)
+                if not update_calendar_event(
+                    service, calendar_id, existing["event_id"], fixture, location
+                ):
                     errors.append(f"Calendar update failed: {label}")
             synced[date_key] = {"event_id": existing.get("event_id", ""), "hash": fixture_hash}
             updated_count += 1
         else:
             event_id = ""
             if service and calendar_id:
-                event_id = create_calendar_event(service, calendar_id, fixture) or ""
+                location = calendar_location_or_empty(fixture)
+                event_id = create_calendar_event(service, calendar_id, fixture, location) or ""
                 if not event_id:
                     errors.append(f"Calendar create failed: {label}")
             

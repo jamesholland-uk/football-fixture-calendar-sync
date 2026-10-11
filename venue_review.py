@@ -72,13 +72,13 @@ def build_venue_review_email(
     if geocoded:
         address = location.get("addressLine") or location.get("address") or ""
         lines += [
-            f"Pin used in Spond: {address}",
+            f"Pin used (Spond and Calendar): {address}",
             f"Map: https://www.google.com/maps?q={location['latitude']},{location['longitude']}",
         ]
         subject = f"Check venue pin: {key}"
     else:
         lines += [
-            "The venue could not be located, so Spond has plain text with no map pin.",
+            "The venue could not be located, so Spond and Calendar have plain text with no map pin.",
         ]
         subject = f"Venue not found: {key}"
 
@@ -113,8 +113,8 @@ def build_venue_review_email(
         "Then:",
         "  1. Recreate the container so it reads the new .env: docker compose up -d",
         "     (a restart or rebuild alone does not pick up .env changes).",
-        "  2. Fix the location on this fixture's Spond event by hand. Changing .env only",
-        "     affects fixtures created afterwards.",
+        "  2. Fix the location on this fixture's Spond / Calendar event by hand.",
+        "     Changing .env only affects fixtures synced afterwards.",
         "You will not be emailed about this venue again.",
     ]
     return subject, "\n".join(lines)
