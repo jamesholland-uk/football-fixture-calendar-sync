@@ -224,3 +224,6 @@ __marimo__/
 service_account.json
 data/
 test-data.csv
+
+# Deploy record written by homelab-docker's deploy.sh on the docker host (hashes only, no secrets)
+.deployed.sha256
