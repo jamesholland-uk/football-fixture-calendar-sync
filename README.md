@@ -187,7 +187,7 @@ Restore the file *before* setting `DRY_RUN=false`. Never go live while it is ren
 
 SMTP cannot tell you the container has died — nothing is left to send mail. Use both:
 
-1. **Failure email** (`EMAIL_TO_ADMIN`, same SMTP as fixture mail): scrape failures, missing fixtures table, Calendar/Spond write errors, and uncaught exceptions. A follow-up mail is sent when the next poll succeeds. New-fixture notices still go only to `EMAIL_TO`.
+1. **Failure email** (`EMAIL_TO_ADMIN`, same SMTP as fixture mail): scrape failures, missing fixtures table (FA's "no upcoming fixtures" message is not a failure unless the page is on an old season), Calendar/Spond write errors, and uncaught exceptions. A follow-up mail is sent when the next poll succeeds. New-fixture notices still go only to `EMAIL_TO`.
 2. **Healthchecks.io** (optional `HEALTHCHECKS_PING_URL`): the container GETs this URL after every poll, even a failed one. If the ping stops, Healthchecks emails you. Set the check period to `POLL_INTERVAL_HOURS` (e.g. 12h) with ~1 hour grace.
 
 3. **Venue check email** (`EMAIL_TO_ADMIN` only, never `EMAIL_TO`): the FA list page only gives a short venue name, so the map pin (Spond and Calendar) for a venue not in `VENUE_ADDRESSES` is a guess. The first time each venue appears, the admin gets the resolved address, a Maps link and the FA fixture page to check it against, plus the `VENUE_ADDRESSES` line to add if it is wrong. Each venue is reported once (tracked in `data/reviewed_venues.json`; delete an entry to be told again). Pinned venues are never reported. If the venue cannot be located at all, the email says so.

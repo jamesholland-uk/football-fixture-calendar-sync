@@ -474,11 +474,39 @@ def save_synced_fixtures(synced: dict) -> None:
         json.dump(synced, f, indent=2)
 
 
+# FA shows this in place of the fixtures table when nothing is scheduled (half term,
+# end of season). That is a valid empty list, not a failed fetch.
+NO_FIXTURES_TEXT = "There are no upcoming fixtures to display"
+
+
+def stale_season_error(soup: BeautifulSoup) -> str | None:
+    """Explain an empty page that is on an old season (a URL pinned to a past season).
+
+    Returns None when the page is on the newest season FA lists, or has no season picker.
+    """
+    season_select = soup.find("select", attrs={"name": "selectedSeason"})
+    if not season_select:
+        return None
+    selected = season_select.find("option", selected=True)
+    seasons = [option.get_text(strip=True) for option in season_select.find_all("option")]
+    if not selected or not seasons:
+        return None
+    shown, newest = selected.get_text(strip=True), max(seasons)
+    if shown == newest:
+        return None
+    return (
+        f"FA shows no upcoming fixtures for season {shown}, but season {newest} exists. "
+        "Check the season in this fixture URL."
+    )
+
+
 def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
     """Fetch fixtures from an FA Full-Time fixtures page.
 
-    Returns (fixtures, None) on success, or (None, error) if the page could not
-    be loaded or the fixtures table is missing (as opposed to a valid empty list).
+    Returns (fixtures, None) on success, ([], None) when FA says there are no
+    upcoming fixtures in its newest season, or (None, error) if the page could not
+    be loaded, is on an old season with nothing upcoming, or shows neither the
+    fixtures table nor FA's no-fixtures message.
     """
     print(f"Polling FA Full-Time: {url[:80]}...")
 
@@ -494,14 +522,26 @@ def fetch_fixtures(url: str) -> tuple[list[dict] | None, str | None]:
             # Navigate to the fixtures page
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             
-            # Wait for the fixtures table to load
-            page.wait_for_selector(".fixtures-table", timeout=30000)
-            
+            # Wait for the fixtures table, or FA's message that there are none
+            table_on_page = page.locator(".fixtures-table")
+            no_fixtures_message = page.get_by_text(NO_FIXTURES_TEXT)
+            table_on_page.or_(no_fixtures_message).first.wait_for(timeout=30000)
+            table_visible = table_on_page.first.is_visible()
+
             # Get the page content
             html = page.content()
-            
+
             # Parse fixtures from the page
             soup = BeautifulSoup(html, "html.parser")
+
+            if not table_visible:
+                browser.close()
+                season_error = stale_season_error(soup)
+                if season_error:
+                    print(f"  {season_error}")
+                    return None, season_error
+                print("  No upcoming fixtures")
+                return [], None
 
             fixtures = []
             fixtures_table = soup.find("div", class_="fixtures-table")
