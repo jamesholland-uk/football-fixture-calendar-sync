@@ -3,6 +3,8 @@ services:
     build: .
     container_name: football-fixture-sync
     restart: unless-stopped
+    # Reap Chromium's leftover child processes; python as PID 1 never does, so they pile up as zombies
+    init: true
     environment:
       # Comma-separated list of FA Full-Time fixture URLs to poll
       - FIXTURE_URLS=${FIXTURE_URLS}
