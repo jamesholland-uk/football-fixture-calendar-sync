@@ -1,5 +1,5 @@
 # Use Python base image (not slim - Playwright needs more dependencies)
-FROM python:3.14
+FROM python:3.15
 
 # Set working directory
 WORKDIR /app
