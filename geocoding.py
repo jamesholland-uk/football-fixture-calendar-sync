@@ -67,6 +67,15 @@ def clean_venue_name(venue_name: str) -> str:
     return " ".join(name.split()).strip()
 
 
+def venue_match_key(venue_name: str) -> str:
+    """One key per ground, for pins and reports: also drops lettered pitch codes (EXA1A).
+
+    clean_venue_name keeps EXA1A because the search name with it is proven in production,
+    but EXA1A and EXA2B are pitches at one ground, so they must share a pin.
+    """
+    return re.sub(r"\s+[A-Z]{2,4}\d{1,2}[A-Z]$", "", clean_venue_name(venue_name))
+
+
 def clean_team_name(team_name: str) -> str:
     name = re.sub(
         r"\s*(U\d+|Juniors?|FC|AFC|United|City|Town|LM|DP|JH|SS|CF|Girls?|Boys?|Elite|Albion|West|Blue|Pumas)\s*",

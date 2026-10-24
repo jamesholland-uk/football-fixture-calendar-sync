@@ -13,12 +13,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from geocoding import clean_venue_name
+from geocoding import venue_match_key
 
 
 def venue_review_key(venue_name: str) -> str:
     """One key per ground, ignoring pitch/3G suffixes (Pitch 1D and Pitch 2 are one venue)."""
-    return clean_venue_name(venue_name)
+    return venue_match_key(venue_name)
 
 
 def load_reviewed_venues(path: Path) -> dict[str, dict]:

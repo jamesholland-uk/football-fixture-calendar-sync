@@ -37,6 +37,12 @@ class ReviewKeyTest(unittest.TestCase):
             venue_review_key("example park pitch 2"),
         )
 
+    def test_lettered_pitch_codes_share_one_key(self) -> None:
+        self.assertEqual(
+            venue_review_key("THE EXAMPLE ARENA EXA1A"),
+            venue_review_key("THE EXAMPLE ARENA EXA2B"),
+        )
+
     def test_different_venues_differ(self) -> None:
         self.assertNotEqual(venue_review_key("EXAMPLE PARK"), venue_review_key("OTHER PARK"))
 

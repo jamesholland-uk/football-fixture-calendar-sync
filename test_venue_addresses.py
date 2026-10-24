@@ -85,6 +85,13 @@ class FindVenueAddressTest(unittest.TestCase):
     def test_no_partial_match(self) -> None:
         self.assertIsNone(find_venue_address("EXAMPLE PARK EXTENSION", self.mapping))
 
+    def test_one_pin_covers_every_lettered_pitch_at_a_ground(self) -> None:
+        # EXA1A and EXA2B are two pitches at one ground; a pin copied from either covers both
+        mapping = {"THE EXAMPLE ARENA EXA1A": PINNED}
+        for venue in ("THE EXAMPLE ARENA EXA1A", "THE EXAMPLE ARENA EXA2B", "THE EXAMPLE ARENA"):
+            with self.subTest(venue=venue):
+                self.assertEqual(find_venue_address(venue, mapping), PINNED)
+
 
 class PinnedGeocodeTest(unittest.TestCase):
     """geocode_chosen(..., address=...) must trust the pinned postcode, not guesses."""
