@@ -227,3 +227,7 @@ test-data.csv
 
 # Deploy record written by homelab-docker's deploy.sh on the docker host (hashes only, no secrets)
 .deployed.sha256
+
+# homelab-docker on the docker host: this workload's backup spec is code (paths only); .applied is the version last applied
+!backup.spec
+.applied
